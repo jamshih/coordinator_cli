@@ -160,6 +160,59 @@ osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_U
 
 If `ensure-url` fails, preserve its exact stderr. Its diagnostic should identify whether the created tab disappeared/replaced, redirected to a different final URL, became ambiguous, or timed out while still loading.
 
+## Tab-mutation scan repair
+
+A second local retest exposed a narrower race in the first reopen-verification repair.
+
+Observed failure:
+
+```text
+Brave Browser got an error:
+Can’t get tab 9 of window 1. Invalid index. (-1719)
+```
+
+Root cause: the verification logic correctly used stable Brave tab ID for identity, but the scanner still enumerated the live tab list with numeric indices. Brave/ChatGPT may replace, close, or reorder tabs while navigation is in progress, so a previously valid upper bound can become stale before `tab ti of window wi` is read.
+
+The repaired verification path keeps numeric indices only as ephemeral scan metadata. Identity remains:
+
+- stable Brave tab ID for the created tab;
+- exact canonical ChatGPT URL.
+
+Each 250 ms poll now performs one combined verification scan that collects both:
+- exact canonical-URL matches;
+- created-tab-ID matches.
+
+If Brave raises AppleScript invalid-index error `-1719` anywhere during that scan, the **entire scan snapshot is discarded**. No conclusion is drawn from partial data. The existing outer 40-poll / 10-second bound then rescans current Brave state.
+
+All other errors still propagate. Existing fail-closed rules for disappearance/replacement, redirect ambiguity, duplicate exact matches, and timeout remain unchanged.
+
+### Exact tab-mutation retest
+
+```bash
+git fetch origin team-r/brave-feasibility-poc
+git switch --detach REVISED_SHA
+
+CHAT_URL='https://chatgpt.com/c/...'
+
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+```
+
+Close that exact tab manually, then:
+
+```bash
+osascript research/brave_chatgpt_poc.applescript ensure-url "$CHAT_URL"
+
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_URL"
+
+sleep 3
+
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_URL"
+```
+
+The acceptance condition is unchanged: `ensure-url` may succeed only after a single durable exact canonical-URL match exists for the stable created-tab ID. A transient `-1719` must be absorbed as a discarded scan, not returned to the caller and not treated as evidence of success.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
