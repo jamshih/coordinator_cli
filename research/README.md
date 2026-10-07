@@ -44,7 +44,6 @@ Node and Python are informational only; the POC does not require either.
 osascript research/brave_chatgpt_poc.applescript doctor
 osascript research/brave_chatgpt_poc.applescript list-chatgpt
 osascript research/brave_chatgpt_poc.applescript activate-title "Diet Team B"
-osascript research/brave_chatgpt_poc.applescript latest-title "Diet Team B"
 ```
 
 Expected `list-chatgpt` columns:
@@ -86,7 +85,7 @@ The command refuses to send if:
 
 It snapshots user/assistant turn counts before Send, waits for a *new* assistant turn, waits for generation to become idle, then returns the latest visible assistant text.
 
-For discovery-only testing, `send-title` also exists, but URL targeting is the intended post-discovery path.
+`latest-title` and `send-title` are intentionally disabled. Titles are discovery metadata only; content reads and sends require canonical URL binding.
 
 ## Open-new-chat proof
 
