@@ -114,20 +114,12 @@ on findTitleMatches(wantedTitle)
 end findTitleMatches
 
 on findURLMatches(wantedURL)
-	set matches to {}
-	tell application "Brave Browser"
-		repeat with wi from 1 to (count of windows)
-			repeat with ti from 1 to (count of tabs of window wi)
-				set currentTab to tab ti of window wi
-				set tTitle to title of currentTab
-				set tURL to URL of currentTab
-				set tID to id of currentTab
-				set tLoading to loading of currentTab
-				if tURL is wantedURL then set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
-			end repeat
-		end repeat
-	end tell
-	return matches
+	repeat with attempt from 1 to 10
+		set scanResult to my scanVerificationState(wantedURL, "__TEAM_R_NO_TAB_ID__")
+		if item 1 of scanResult is true then return item 2 of scanResult
+		delay 0.05
+	end repeat
+	error "Brave tab set kept mutating during canonical URL discovery; refusing operation"
 end findURLMatches
 
 on findTabByID(wantedID)
@@ -153,29 +145,54 @@ end findTabByID
 -- scan is in progress. If a tab index becomes invalid (-1719), the entire
 -- snapshot is discarded so ensureCanonicalURL can rescan fresh state inside
 -- its bounded verification loop.
+on sameIDLists(leftIDs, rightIDs)
+	if (count of leftIDs) is not (count of rightIDs) then return false
+	repeat with i from 1 to (count of leftIDs)
+		if ((item i of leftIDs) as text) is not ((item i of rightIDs) as text) then return false
+	end repeat
+	return true
+end sameIDLists
+
 on scanVerificationState(wantedURL, wantedID)
 	set urlMatches to {}
 	set idMatches to {}
 	try
 		tell application "Brave Browser"
-			set windowCount to count of windows
-			repeat with wi from 1 to windowCount
-				set tabCount to count of tabs of window wi
-				repeat with ti from 1 to tabCount
-					set currentTab to tab ti of window wi
-					set tTitle to title of currentTab
-					set tURL to URL of currentTab
-					set tID to id of currentTab
-					set tLoading to loading of currentTab
-					set tWindowID to id of window wi
-					set tabSnapshot to {wi, ti, tTitle, tURL, tID, tLoading, tWindowID}
+			set startWindowIDs to id of windows
+
+			repeat with wi from 1 to (count of startWindowIDs)
+				set stableWindowID to item wi of startWindowIDs
+				set stableWindow to first window whose id is stableWindowID
+				set startTabIDs to id of tabs of stableWindow
+
+				repeat with ti from 1 to (count of startTabIDs)
+					set stableTabID to item ti of startTabIDs
+					set stableTab to first tab of stableWindow whose id is stableTabID
+					set tTitle to title of stableTab
+					set tURL to URL of stableTab
+					set tLoading to loading of stableTab
+
+					-- Re-read identity after properties so a replacement cannot
+					-- silently mix URL/title from one tab with ID from another.
+					set finalTabID to id of stableTab
+					set finalURL to URL of stableTab
+					if (finalTabID as text) is not (stableTabID as text) then return {false, {}, {}}
+					if finalURL is not tURL then return {false, {}, {}}
+
+					set tabSnapshot to {wi, ti, tTitle, tURL, stableTabID, tLoading, stableWindowID}
 					if tURL is wantedURL then set end of urlMatches to tabSnapshot
-					if (tID as text) is (wantedID as text) then set end of idMatches to tabSnapshot
+					if (stableTabID as text) is (wantedID as text) then set end of idMatches to tabSnapshot
 				end repeat
+
+				set endTabIDs to id of tabs of stableWindow
+				if my sameIDLists(startTabIDs, endTabIDs) is false then return {false, {}, {}}
 			end repeat
+
+			set endWindowIDs to id of windows
+			if my sameIDLists(startWindowIDs, endWindowIDs) is false then return {false, {}, {}}
 		end tell
 	on error errText number errNum
-		if errNum is -1719 then return {false, {}, {}}
+		if (errNum is -1719) or (errNum is -1728) then return {false, {}, {}}
 		error errText number errNum
 	end try
 	return {true, urlMatches, idMatches}
@@ -244,8 +261,16 @@ on activateCanonicalMatch(theMatch)
 end activateCanonicalMatch
 
 on resolveCanonicalIdentity(expectedID, expectedURL)
-	set verificationScan to my scanVerificationState(expectedURL, expectedID)
-	if item 1 of verificationScan is false then error "Canonical target mutated during identity re-resolution; refusing operation"
+	set verificationScan to missing value
+	repeat with attempt from 1 to 10
+		set candidateScan to my scanVerificationState(expectedURL, expectedID)
+		if item 1 of candidateScan is true then
+			set verificationScan to candidateScan
+			exit repeat
+		end if
+		delay 0.05
+	end repeat
+	if verificationScan is missing value then error "Canonical target kept mutating during identity re-resolution; refusing operation"
 
 	set urlMatches to item 2 of verificationScan
 	set idMatches to item 3 of verificationScan
