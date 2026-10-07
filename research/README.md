@@ -494,6 +494,38 @@ On exact code commit `b7f81611c94321f8dfa98f7b2dda61bbd9213acb`:
 
 The immutable candidate SHA recorded on Issue #2 must be retested after this documentation-only commit before Team R calls the evidence exact-SHA final.
 
+## Final RDC-first canonical binding closure
+
+The final implementation adds one additional bounded pre-action rule after the Diet Team B investigation:
+
+- if a stable scan finds neither the previous tab ID nor the canonical URL, the helper may rescan for up to 30 × 100 ms;
+- this tolerance applies only to discovery / identity re-resolution **before** a content action;
+- if the previous tab ID is still present at a different URL, the helper fails immediately;
+- duplicate canonical URL matches fail immediately;
+- once a concrete read/paste/Send action is invoked, that action is never automatically retried.
+
+This is needed because Chromium can legitimately replace a tab (for example during prerender activation), and the reopened Diet Team B route demonstrated a brief interval where the canonical URL disappeared and then reappeared unchanged.
+
+The transport path now has three distinct safety layers:
+
+1. **stable snapshot discovery** — window IDs and tab-ID lists must remain unchanged for the scan;
+2. **canonical rebind proof** — the exact canonical URL must be unique, and a changed tab ID is accepted only when the previous ID is absent;
+3. **direct target action** — the owning window and tab are re-addressed by stable IDs and their URL/ID are checked again immediately before the read/paste/Send action.
+
+The exact code commit `a346b08832f8e76cb40e2ed619d06a012ba62ddf` passed on Air.local:
+
+- `osacompile`: PASS;
+- real Diet Team B `latest-url`: PASS;
+- harmless real Diet Team B `send-url`:
+  `TEAM_R_RDC_REBIND_TEST_20261007_E - reply only with POC_OK`;
+- helper result: `POC_OK`;
+- independent exact-text count: `1`;
+- independent last-user text: exact supplied text;
+- independent latest assistant: `POC_OK`;
+- independent busy state after completion: `false`.
+
+The immutable candidate containing this documentation must still be checked out and smoke-tested by exact SHA; that exact-SHA evidence is recorded on Issue #2 rather than by adding another documentation commit.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
