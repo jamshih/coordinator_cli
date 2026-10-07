@@ -212,10 +212,14 @@ end activateMatch
 -- Authorization comes from re-verifying the active Brave tab's stable ID
 -- and exact canonical conversation URL immediately before content access.
 on activateCanonicalMatch(theMatch)
-	set wi to item 1 of theMatch
-	set ti to item 2 of theMatch
 	set expectedURL to item 4 of theMatch
 	set expectedID to item 5 of theMatch
+
+	-- Re-resolve the expected stable identity immediately before focus so the
+	-- numeric indices are only a fresh focus hint, never authorization.
+	set freshMatch to my resolveCanonicalIdentity(expectedID, expectedURL)
+	set wi to item 1 of freshMatch
+	set ti to item 2 of freshMatch
 
 	try
 		tell application "Brave Browser"
@@ -231,6 +235,28 @@ on activateCanonicalMatch(theMatch)
 	delay 0.2
 	return my verifiedActiveSnapshot(expectedID, expectedURL)
 end activateCanonicalMatch
+
+on resolveCanonicalIdentity(expectedID, expectedURL)
+	set verificationScan to my scanVerificationState(expectedURL, expectedID)
+	if item 1 of verificationScan is false then error "Canonical target mutated during identity re-resolution; refusing operation"
+
+	set urlMatches to item 2 of verificationScan
+	set idMatches to item 3 of verificationScan
+	if (count of urlMatches) is not 1 then
+		if (count of urlMatches) = 0 then error "Canonical target URL disappeared during identity re-resolution; refusing operation"
+		error "Ambiguous canonical URL during identity re-resolution; refusing operation"
+	end if
+	if (count of idMatches) is not 1 then
+		if (count of idMatches) = 0 then error "Canonical target tab ID disappeared during identity re-resolution; refusing operation"
+		error "Ambiguous canonical tab ID during identity re-resolution; refusing operation"
+	end if
+
+	set urlMatch to item 1 of urlMatches
+	set idMatch to item 1 of idMatches
+	if ((item 5 of urlMatch) as text) is not (expectedID as text) then error "Canonical URL now belongs to a different tab ID; refusing operation"
+	if (item 4 of idMatch) is not expectedURL then error "Canonical tab ID now points at a different URL; refusing operation"
+	return urlMatch
+end resolveCanonicalIdentity
 
 on verifiedActiveSnapshot(expectedID, expectedURL)
 	try
