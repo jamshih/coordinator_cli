@@ -167,7 +167,8 @@ on scanVerificationState(wantedURL, wantedID)
 					set tURL to URL of currentTab
 					set tID to id of currentTab
 					set tLoading to loading of currentTab
-					set tabSnapshot to {wi, ti, tTitle, tURL, tID, tLoading}
+					set tWindowID to id of window wi
+					set tabSnapshot to {wi, ti, tTitle, tURL, tID, tLoading, tWindowID}
 					if tURL is wantedURL then set end of urlMatches to tabSnapshot
 					if (tID as text) is (wantedID as text) then set end of idMatches to tabSnapshot
 				end repeat
@@ -309,17 +310,30 @@ on verifiedActiveSnapshot(expectedID, expectedURL)
 	return {actualTitle, actualURL, actualID}
 end verifiedActiveSnapshot
 
+on executeVerifiedJavaScr
+
+-- Content transport does not depend on the globally front Brave window.
+-- Resolve the unique canonical URL twice, then address the exact owning window
+-- and tab by their stable IDs. This lets RDC/browser work continue even when
+-- another Brave window or macOS Space is frontmost.
 on executeVerifiedJavaScript(expectedID, expectedURL, jsText)
-	set binding to my verifiedActiveSnapshot(expectedID, expectedURL)
-	set boundID to item 3 of binding
+	set firstBinding to my resolveCanonicalIdentity(expectedID, expectedURL)
+	set boundID to item 5 of firstBinding
+
+	-- Repeat canonical proof immediately before the read/Send action.
+	set finalBinding to my resolveCanonicalIdentity(boundID, expectedURL)
+	if ((item 5 of finalBinding) as text) is not (boundID as text) then error "Canonical tab binding changed before JavaScript; refusing operation"
+	set targetWindowID to item 7 of finalBinding
+
 	try
 		tell application "Brave Browser"
-			set currentTab to active tab of front window
-			set actualID to id of currentTab
-			set actualURL to URL of currentTab
+			set targetWindow to first window whose id is targetWindowID
+			set targetTab to first tab of targetWindow whose id is boundID
+			set actualID to id of targetTab
+			set actualURL to URL of targetTab
 			if actualURL is not expectedURL then error "Canonical URL changed immediately before JavaScript; refusing operation"
 			if (actualID as text) is not (boundID as text) then error "Canonical tab binding changed immediately before JavaScript; refusing operation"
-			tell currentTab to return execute javascript jsText
+			tell targetTab to return execute javascript jsText
 		end tell
 	on error errText number errNum
 		if errNum is -1719 then error "Canonical target mutated immediately before JavaScript; refusing operation"
@@ -328,16 +342,29 @@ on executeVerifiedJavaScript(expectedID, expectedURL, jsText)
 end executeVerifiedJavaScript
 
 on pasteVerifiedSelection(expectedID, expectedURL)
-	set binding to my verifiedActiveSnapshot(expectedID, expectedURL)
-	set boundID to item 3 of binding
+	set firstBinding to my resolveCanonicalIdentity(expectedID, expectedURL)
+	set boundID to item 5 of firstBinding
+
+	-- Repeat canonical proof immediately before paste. Numeric tab index is
+	-- only a local focus hint inside the already-identified owning window.
+	set finalBinding to my resolveCanonicalIdentity(boundID, expectedURL)
+	if ((item 5 of finalBinding) as text) is not (boundID as text) then error "Canonical tab binding changed before paste; refusing operation"
+	set targetTabIndex to item 2 of finalBinding
+	set targetWindowID to item 7 of finalBinding
+
 	try
 		tell application "Brave Browser"
-			set currentTab to active tab of front window
-			set actualID to id of currentTab
-			set actualURL to URL of currentTab
-			if actualURL is not expectedURL then error "Canonical URL changed immediately before paste; refusing operation"
-			if (actualID as text) is not (boundID as text) then error "Canonical tab binding changed immediately before paste; refusing operation"
-			tell currentTab to paste selection
+			set targetWindow to first window whose id is targetWindowID
+			set active tab index of targetWindow to targetTabIndex
+			set targetTab to first tab of targetWindow whose id is boundID
+			set localActiveTab to active tab of targetWindow
+
+			if (URL of targetTab) is not expectedURL then error "Canonical target URL changed immediately before paste; refusing operation"
+			if ((id of targetTab) as text) is not (boundID as text) then error "Canonical target ID changed immediately before paste; refusing operation"
+			if (URL of localActiveTab) is not expectedURL then error "Numeric focus hint selected a different URL; refusing paste"
+			if ((id of localActiveTab) as text) is not (boundID as text) then error "Numeric focus hint selected a different tab ID; refusing paste"
+
+			tell targetTab to paste selection
 		end tell
 	on error errText number errNum
 		if errNum is -1719 then error "Canonical target mutated immediately before paste; refusing operation"
@@ -422,7 +449,6 @@ end openNewChat
 on latestForMatch(theMatch)
 	set expectedURL to item 4 of theMatch
 	set expectedID to item 5 of theMatch
-	my activateCanonicalMatch(theMatch)
 	return my latestForActiveCanonical(expectedID, expectedURL)
 end latestForMatch
 
@@ -434,7 +460,6 @@ end latestForActiveCanonical
 on sendAndWait(theMatch, messageText)
 	set canonicalURL to item 4 of theMatch
 	set expectedTabID to item 5 of theMatch
-	my activateCanonicalMatch(theMatch)
 
 	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; if(document.querySelector('button[data-testid=stop-button],button[aria-label=\"Stop\"],button[aria-label=\"Stop generating\"],button[aria-label=\"Stop streaming\"]')) return 'BUSY_GENERATING'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); let a=document.querySelectorAll('[data-message-author-role=assistant]').length; if(!a) a=document.querySelectorAll('h4[data-conversation-role=assistant]').length; let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; return 'READY|' + a + '|' + u; })()"
 	set preflight to my executeVerifiedJavaScript(expectedTabID, canonicalURL, preflightJS)
