@@ -114,6 +114,52 @@ Paste the exact stdout/stderr and exit status into Issue #2 for:
 
 Do not post unrelated tab URLs, private chat contents, cookies, tokens, or secrets.
 
+## Reopen verification repair
+
+The earlier `ensure-url` implementation created a tab, waited one fixed second, and returned the original AppleScript `newTab` object's title/URL without proving that the tab still existed in Brave.
+
+That produced a false-positive local result: the command printed the requested canonical URL even though a subsequent full tab scan found no such tab.
+
+The repaired `ensure-url` now:
+
+- creates the requested canonical URL;
+- records the new Brave tab's unique tab ID;
+- polls every 250 ms for up to 10 seconds;
+- rescans **all** Brave windows/tabs on every poll;
+- tracks the created tab by ID while navigation occurs;
+- succeeds only when exactly one tab has the requested canonical URL, that exact tab is the created tab, and its `loading` state is false;
+- fails closed if the created tab disappears/replaces, redirects and settles elsewhere, the canonical URL appears in another tab, duplicate exact matches appear, or verification times out.
+
+The failure text includes the last observed URL/loading state where available so the local retest can distinguish redirect vs replacement/closure.
+
+### Exact reopen retest
+
+Start from a currently open known chat:
+
+```bash
+CHAT_URL='https://chatgpt.com/c/...'
+
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+```
+
+Close that exact chat tab manually, then run:
+
+```bash
+osascript research/brave_chatgpt_poc.applescript ensure-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_URL"
+```
+
+Then wait three seconds and verify again:
+
+```bash
+sleep 3
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_URL"
+```
+
+If `ensure-url` fails, preserve its exact stderr. Its diagnostic should identify whether the created tab disappeared/replaced, redirected to a different final URL, became ambiguous, or timed out while still loading.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
