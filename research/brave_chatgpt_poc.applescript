@@ -17,21 +17,19 @@ on run argv
 		return activateMatch(my requireUniqueTitleMatch(item 2 of argv))
 	else if commandName is "activate-url" then
 		if (count of argv) < 2 then error "activate-url requires a canonical ChatGPT URL"
-		return activateMatch(my requireUniqueURLMatch(item 2 of argv))
+		return activateCanonicalMatch(my requireUniqueURLMatch(item 2 of argv))
 	else if commandName is "ensure-url" then
 		if (count of argv) < 2 then error "ensure-url requires a canonical ChatGPT URL"
 		return ensureCanonicalURL(item 2 of argv)
 	else if commandName is "new-chat" then
 		return openNewChat()
 	else if commandName is "latest-title" then
-		if (count of argv) < 2 then error "latest-title requires a chat title"
-		return latestForMatch(my requireUniqueTitleMatch(item 2 of argv))
+		error "latest-title is disabled: title is discovery-only metadata. Use latest-url with the canonical ChatGPT conversation URL."
 	else if commandName is "latest-url" then
 		if (count of argv) < 2 then error "latest-url requires a canonical ChatGPT URL"
 		return latestForMatch(my requireUniqueURLMatch(item 2 of argv))
 	else if commandName is "send-title" then
-		if (count of argv) < 3 then error "send-title requires a chat title and message text"
-		return sendAndWait(my requireUniqueTitleMatch(item 2 of argv), item 3 of argv)
+		error "send-title is disabled: title is discovery-only metadata. Use send-url with the canonical ChatGPT conversation URL."
 	else if commandName is "send-url" then
 		if (count of argv) < 3 then error "send-url requires a canonical ChatGPT URL and message text"
 		return sendAndWait(my requireUniqueURLMatch(item 2 of argv), item 3 of argv)
@@ -210,11 +208,88 @@ on activateMatch(theMatch)
 	end tell
 end activateMatch
 
+-- Canonical operations may use captured indices only as a focus hint.
+-- Authorization comes from re-verifying the active Brave tab's stable ID
+-- and exact canonical conversation URL immediately before content access.
+on activateCanonicalMatch(theMatch)
+	set wi to item 1 of theMatch
+	set ti to item 2 of theMatch
+	set expectedURL to item 4 of theMatch
+	set expectedID to item 5 of theMatch
+
+	try
+		tell application "Brave Browser"
+			set active tab index of window wi to ti
+			set index of window wi to 1
+			activate
+		end tell
+	on error errText number errNum
+		if errNum is -1719 then error "Canonical target mutated during focus; refusing stale numeric-index activation"
+		error errText number errNum
+	end try
+
+	delay 0.2
+	return my verifiedActiveSnapshot(expectedID, expectedURL)
+end activateCanonicalMatch
+
+on verifiedActiveSnapshot(expectedID, expectedURL)
+	try
+		tell application "Brave Browser"
+			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
+			set currentTab to active tab of front window
+			set actualID to id of currentTab
+			set actualURL to URL of currentTab
+			set actualTitle to title of currentTab
+		end tell
+	on error errText number errNum
+		if errNum is -1719 then error "Canonical target mutated during active-tab verification; refusing content access"
+		error errText number errNum
+	end try
+
+	if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed before content access; refusing operation"
+	if actualURL is not expectedURL then error "Canonical target URL changed before content access; refusing operation"
+	return {actualTitle, actualURL, actualID}
+end verifiedActiveSnapshot
+
+on executeVerifiedJavaScript(expectedID, expectedURL, jsText)
+	try
+		tell application "Brave Browser"
+			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
+			set currentTab to active tab of front window
+			set actualID to id of currentTab
+			set actualURL to URL of currentTab
+			if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed immediately before JavaScript; refusing operation"
+			if actualURL is not expectedURL then error "Canonical target URL changed immediately before JavaScript; refusing operation"
+			tell currentTab to return execute javascript jsText
+		end tell
+	on error errText number errNum
+		if errNum is -1719 then error "Canonical target mutated immediately before JavaScript; refusing operation"
+		error errText number errNum
+	end try
+end executeVerifiedJavaScript
+
+on pasteVerifiedSelection(expectedID, expectedURL)
+	try
+		tell application "Brave Browser"
+			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
+			set currentTab to active tab of front window
+			set actualID to id of currentTab
+			set actualURL to URL of currentTab
+			if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed immediately before paste; refusing operation"
+			if actualURL is not expectedURL then error "Canonical target URL changed immediately before paste; refusing operation"
+			tell currentTab to paste selection
+		end tell
+	on error errText number errNum
+		if errNum is -1719 then error "Canonical target mutated immediately before paste; refusing operation"
+		error errText number errNum
+	end try
+end pasteVerifiedSelection
+
 on ensureCanonicalURL(wantedURL)
 	if not my isChatGPTURL(wantedURL) then error "Refusing non-ChatGPT URL: " & wantedURL
 
 	set matches to my findURLMatches(wantedURL)
-	if (count of matches) = 1 then return my activateMatch(item 1 of matches)
+	if (count of matches) = 1 then return my activateCanonicalMatch(item 1 of matches)
 	if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
 
 	tell application "Brave Browser"
@@ -285,21 +360,24 @@ on openNewChat()
 end openNewChat
 
 on latestForMatch(theMatch)
-	my activateMatch(theMatch)
-	set js to "(() => { const a=[...document.querySelectorAll('[data-message-author-role=assistant]')]; if(!a.length) return ''; const last=a[a.length-1]; const md=last.querySelector('.markdown'); return (md||last).innerText.trim(); })()"
-	tell application "Brave Browser"
-		tell active tab of front window to return execute javascript js
-	end tell
+	set expectedURL to item 4 of theMatch
+	set expectedID to item 5 of theMatch
+	my activateCanonicalMatch(theMatch)
+	return my latestForActiveCanonical(expectedID, expectedURL)
 end latestForMatch
 
+on latestForActiveCanonical(expectedID, expectedURL)
+	set js to "(() => { const a=[...document.querySelectorAll('[data-message-author-role=assistant]')]; if(!a.length) return ''; const last=a[a.length-1]; const md=last.querySelector('.markdown'); return (md||last).innerText.trim(); })()"
+	return my executeVerifiedJavaScript(expectedID, expectedURL, js)
+end latestForActiveCanonical
+
 on sendAndWait(theMatch, messageText)
-	my activateMatch(theMatch)
 	set canonicalURL to item 4 of theMatch
+	set expectedTabID to item 5 of theMatch
+	my activateCanonicalMatch(theMatch)
 
 	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; if(document.querySelector('button[data-testid=stop-button]')) return 'BUSY_GENERATING'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; return 'READY|' + a + '|' + u; })()"
-	tell application "Brave Browser"
-		tell active tab of front window to set preflight to execute javascript preflightJS
-	end tell
+	set preflight to my executeVerifiedJavaScript(expectedTabID, canonicalURL, preflightJS)
 	if preflight is "NO_COMPOSER" then error "ChatGPT composer not found; DOM may have changed or the page is not ready"
 	if preflight is "BUSY_GENERATING" then error "Refusing to send while ChatGPT is already generating"
 	if preflight is "COMPOSER_NOT_EMPTY" then error "Refusing to overwrite an existing ChatGPT draft"
@@ -310,45 +388,44 @@ on sendAndWait(theMatch, messageText)
 	set baselineAssistantCount to (text item 2 of preflight) as integer
 	set baselineUserCount to (text item 3 of preflight) as integer
 	set AppleScript's text item delimiters to oldDelims
+	set expectedUserCount to baselineUserCount + 1
 
 	set the clipboard to messageText
-	tell application "Brave Browser"
-		tell active tab of front window to paste selection
-	end tell
+	my pasteVerifiedSelection(expectedTabID, canonicalURL)
 	delay 0.3
 
-	tell application "Brave Browser"
-		tell active tab of front window to set pastedText to execute javascript "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); return c ? c.innerText : ''; })()"
-	end tell
+	set pastedText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); return c ? c.innerText : ''; })()")
 	if pastedText is not messageText then error "Paste verification failed; message was NOT submitted"
 
 	set sendJS to "(() => { const b=document.querySelector('#composer-submit-button,[data-testid=send-button]'); if(!b || b.disabled) return 'SEND_NOT_READY'; b.click(); return 'SENT'; })()"
-	tell application "Brave Browser"
-		tell active tab of front window to set sendState to execute javascript sendJS
-	end tell
+	set sendState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, sendJS)
 	if sendState is not "SENT" then error "Message was NOT submitted: " & sendState
 
 	set userTurnConfirmed to false
 	repeat with attempt from 1 to 10
 		delay 0.5
-		set userJS to "(() => { const u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) return ''; return u[u.length-1].innerText.trim(); })()"
-		tell application "Brave Browser"
-			tell active tab of front window to set lastUserText to execute javascript userJS
-		end tell
-		if lastUserText is messageText then
-			set userTurnConfirmed to true
-			exit repeat
+		set observedUserCount to (my executeVerifiedJavaScript(expectedTabID, canonicalURL, "document.querySelectorAll('[data-message-author-role=user]').length.toString()")) as integer
+		if observedUserCount > expectedUserCount then error "Manual/concurrent interference detected before submitted turn confirmation; refusing response association"
+		if observedUserCount is expectedUserCount then
+			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const u=[...document.querySelectorAll('[data-message-author-role=user]')]; return u.length ? u[u.length-1].innerText.trim() : ''; })()")
+			if lastUserText is messageText then
+				set userTurnConfirmed to true
+				exit repeat
+			else
+				error "Tracked user sequence changed before submitted turn confirmation; refusing response association"
+			end if
 		end if
 	end repeat
 	if userTurnConfirmed is false then error "Submitted user turn could not be verified; refusing to associate a later response"
 
+	set userSequenceJS to "JSON.stringify([...document.querySelectorAll('[data-message-author-role=user]')].map(n => n.innerText.trim()))"
+	set ownedUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
+
 	set idleConfirmations to 0
 	repeat with attempt from 1 to 180
 		delay 1
-		set stateJS to "(() => { const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; const busy=!!document.querySelector('button[data-testid=stop-button]'); return a + '|' + u + '|' + (busy ? '1' : '0'); })()"
-		tell application "Brave Browser"
-			tell active tab of front window to set responseState to execute javascript stateJS
-		end tell
+
+		set responseState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; const busy=!!document.querySelector('button[data-testid=stop-button]'); return a + '|' + u + '|' + (busy ? '1' : '0'); })()")
 
 		set oldDelims to AppleScript's text item delimiters
 		set AppleScript's text item delimiters to "|"
@@ -357,15 +434,21 @@ on sendAndWait(theMatch, messageText)
 		set isBusy to text item 3 of responseState
 		set AppleScript's text item delimiters to oldDelims
 
-		if (responseAssistantCount > baselineAssistantCount) and (responseUserCount > baselineUserCount) and (isBusy is "0") then
+		if responseUserCount is not expectedUserCount then error "Manual/concurrent interference detected: unexpected additional or missing user turn; refusing response association"
+		set currentUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
+		if currentUserSequence is not ownedUserSequence then error "Manual/concurrent interference detected: tracked user sequence changed; refusing response association"
+
+		if (responseAssistantCount > baselineAssistantCount) and (isBusy is "0") then
 			set idleConfirmations to idleConfirmations + 1
 		else
 			set idleConfirmations to 0
 		end if
 
 		if idleConfirmations is greater than or equal to 2 then
-			set freshMatch to my requireUniqueURLMatch(canonicalURL)
-			return my latestForMatch(freshMatch)
+			-- Final ownership check immediately before response extraction.
+			set finalUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
+			if finalUserSequence is not ownedUserSequence then error "Manual/concurrent interference detected before response extraction; refusing response association"
+			return my latestForActiveCanonical(expectedTabID, canonicalURL)
 		end if
 	end repeat
 
