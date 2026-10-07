@@ -151,11 +151,13 @@ on findTabByID(wantedID)
 	return matches
 end findTabByID
 
--- Verification-only scanners. Brave may mutate/reorder/replace tabs while a scan
--- is in progress. If a tab index becomes invalid (-1719), the whole snapshot is
--- discarded so ensureCanonicalURL can rescan fresh state inside its bounded loop.
-on scanURLMatchesForVerification(wantedURL)
-	set matches to {}
+-- Verification-only scanner. Brave may mutate/reorder/replace tabs while a
+-- scan is in progress. If a tab index becomes invalid (-1719), the entire
+-- snapshot is discarded so ensureCanonicalURL can rescan fresh state inside
+-- its bounded verification loop.
+on scanVerificationState(wantedURL, wantedID)
+	set urlMatches to {}
+	set idMatches to {}
 	try
 		tell application "Brave Browser"
 			set windowCount to count of windows
@@ -167,42 +169,18 @@ on scanURLMatchesForVerification(wantedURL)
 					set tURL to URL of currentTab
 					set tID to id of currentTab
 					set tLoading to loading of currentTab
-					if tURL is wantedURL then set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
+					set tabSnapshot to {wi, ti, tTitle, tURL, tID, tLoading}
+					if tURL is wantedURL then set end of urlMatches to tabSnapshot
+					if (tID as text) is (wantedID as text) then set end of idMatches to tabSnapshot
 				end repeat
 			end repeat
 		end tell
 	on error errText number errNum
-		if errNum is -1719 then return {false, {}}
+		if errNum is -1719 then return {false, {}, {}}
 		error errText number errNum
 	end try
-	return {true, matches}
-end scanURLMatchesForVerification
-
-on scanTabByIDForVerification(wantedID)
-	set matches to {}
-	try
-		tell application "Brave Browser"
-			set windowCount to count of windows
-			repeat with wi from 1 to windowCount
-				set tabCount to count of tabs of window wi
-				repeat with ti from 1 to tabCount
-					set currentTab to tab ti of window wi
-					set tID to id of currentTab
-					if (tID as text) is (wantedID as text) then
-						set tTitle to title of currentTab
-						set tURL to URL of currentTab
-						set tLoading to loading of currentTab
-						set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
-					end if
-				end repeat
-			end repeat
-		end tell
-	on error errText number errNum
-		if errNum is -1719 then return {false, {}}
-		error errText number errNum
-	end try
-	return {true, matches}
-end scanTabByIDForVerification
+	return {true, urlMatches, idMatches}
+end scanVerificationState
 
 on requireUniqueTitleMatch(wantedTitle)
 	set matches to my findTitleMatches(wantedTitle)
@@ -253,47 +231,43 @@ on ensureCanonicalURL(wantedURL)
 	repeat with attempt from 1 to 40
 		delay 0.25
 
-		set urlScan to my scanURLMatchesForVerification(wantedURL)
-		if item 1 of urlScan is false then
-			-- Brave mutated the tab list mid-scan. Discard this snapshot and retry.
-		else
-			set matches to item 2 of urlScan
+		set verificationScan to my scanVerificationState(wantedURL, createdTabID)
+		if item 1 of verificationScan is true then
+			set matches to item 2 of verificationScan
+			set trackedTabs to item 3 of verificationScan
+
 			if (count of matches) > 1 then
 				error "Ambiguous canonical URL after reopen; " & (count of matches) & " tabs match: " & wantedURL
 			end if
 
-			set idScan to my scanTabByIDForVerification(createdTabID)
-			if item 1 of idScan is false then
-				-- Same rule: never reason from a partial/mutated snapshot.
-			else
-				set trackedTabs to item 2 of idScan
-				if (count of trackedTabs) = 0 then
-					if (count of matches) = 1 then
-						error "Created tab was replaced or disappeared before verification; requested canonical URL exists in a different tab. Refusing ambiguous success for: " & wantedURL
-					end if
-					error "Created tab was closed, replaced, or otherwise disappeared before canonical URL verification: " & wantedURL
-				end if
-				if (count of trackedTabs) > 1 then error "Unexpected duplicate tab ID while verifying canonical URL"
-
-				set trackedTab to item 1 of trackedTabs
-				set lastObservedURL to item 4 of trackedTab
-				set lastObservedLoading to item 6 of trackedTab
-
+			if (count of trackedTabs) = 0 then
 				if (count of matches) = 1 then
-					set exactMatch to item 1 of matches
-					if ((item 5 of exactMatch) as text) is not (createdTabID as text) then
-						error "Redirect/replacement ambiguity: requested canonical URL appeared in a different tab while the created tab remained at: " & lastObservedURL
-					end if
-					if lastObservedLoading is false then
-						-- Numeric indices are only ephemeral scan metadata. Success is
-						-- based on stable tab ID + exact canonical URL + loading=false.
-						return (item 3 of exactMatch) & tab & (item 4 of exactMatch)
-					end if
-				else if (lastObservedLoading is false) and (lastObservedURL is not wantedURL) then
-					error "Redirect ambiguity: created tab finished loading at " & lastObservedURL & " instead of requested canonical URL " & wantedURL
+					error "Created tab was replaced or disappeared before verification; requested canonical URL exists in a different tab. Refusing ambiguous success for: " & wantedURL
 				end if
+				error "Created tab was closed, replaced, or otherwise disappeared before canonical URL verification: " & wantedURL
+			end if
+			if (count of trackedTabs) > 1 then error "Unexpected duplicate tab ID while verifying canonical URL"
+
+			set trackedTab to item 1 of trackedTabs
+			set lastObservedURL to item 4 of trackedTab
+			set lastObservedLoading to item 6 of trackedTab
+
+			if (count of matches) = 1 then
+				set exactMatch to item 1 of matches
+				if ((item 5 of exactMatch) as text) is not (createdTabID as text) then
+					error "Redirect/replacement ambiguity: requested canonical URL appeared in a different tab while the created tab remained at: " & lastObservedURL
+				end if
+				if lastObservedLoading is false then
+					-- Numeric indices are only ephemeral scan metadata. Success is
+					-- based on stable tab ID + exact canonical URL + loading=false.
+					return (item 3 of exactMatch) & tab & (item 4 of exactMatch)
+				end if
+			else if (lastObservedLoading is false) and (lastObservedURL is not wantedURL) then
+				error "Redirect ambiguity: created tab finished loading at " & lastObservedURL & " instead of requested canonical URL " & wantedURL
 			end if
 		end if
+		-- A false scan result means Brave returned -1719 while mutating tabs.
+		-- Discard that entire snapshot and let the next bounded poll rescan.
 	end repeat
 
 	error "Timed out verifying reopened canonical URL after 10 seconds. Created tab still observed at " & lastObservedURL & " (loading=" & (lastObservedLoading as text) & "); requested " & wantedURL
