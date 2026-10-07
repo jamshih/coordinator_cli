@@ -18,6 +18,9 @@ on run argv
 	else if commandName is "activate-url" then
 		if (count of argv) < 2 then error "activate-url requires a canonical ChatGPT URL"
 		return activateMatch(my requireUniqueURLMatch(item 2 of argv))
+	else if commandName is "ensure-url" then
+		if (count of argv) < 2 then error "ensure-url requires a canonical ChatGPT URL"
+		return ensureCanonicalURL(item 2 of argv)
 	else if commandName is "new-chat" then
 		return openNewChat()
 	else if commandName is "latest-title" then
@@ -43,6 +46,7 @@ on usageText()
 		"  osascript research/brave_chatgpt_poc.applescript list-chatgpt" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript activate-title \"Diet Team B\"" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript activate-url \"https://chatgpt.com/c/...\"" & linefeed & ¬
+		"  osascript research/brave_chatgpt_poc.applescript ensure-url \"https://chatgpt.com/c/...\"" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript new-chat" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript latest-url \"https://chatgpt.com/c/...\"" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript send-url \"https://chatgpt.com/c/...\" \"TEAM_R_POC_TEST_20261007\""
@@ -152,6 +156,21 @@ on activateMatch(theMatch)
 	end tell
 end activateMatch
 
+on ensureCanonicalURL(wantedURL)
+	if not my isChatGPTURL(wantedURL) then error "Refusing non-ChatGPT URL: " & wantedURL
+	set matches to my findURLMatches(wantedURL)
+	if (count of matches) = 1 then return my activateMatch(item 1 of matches)
+	if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
+	tell application "Brave Browser"
+		if (count of windows) = 0 then make new window
+		set newTab to make new tab at end of tabs of front window with properties {URL:wantedURL}
+		set active tab index of front window to (count of tabs of front window)
+		activate
+		delay 1
+		return (title of newTab) & tab & (URL of newTab)
+	end tell
+end ensureCanonicalURL
+
 on openNewChat()
 	tell application "Brave Browser"
 		if (count of windows) = 0 then make new window
@@ -175,11 +194,12 @@ on sendAndWait(theMatch, messageText)
 	my activateMatch(theMatch)
 	set canonicalURL to item 4 of theMatch
 
-	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; return 'READY|' + a + '|' + u; })()"
+	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; if(document.querySelector('button[data-testid=stop-button]')) return 'BUSY_GENERATING'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; return 'READY|' + a + '|' + u; })()"
 	tell application "Brave Browser"
 		tell active tab of front window to set preflight to execute javascript preflightJS
 	end tell
 	if preflight is "NO_COMPOSER" then error "ChatGPT composer not found; DOM may have changed or the page is not ready"
+	if preflight is "BUSY_GENERATING" then error "Refusing to send while ChatGPT is already generating"
 	if preflight is "COMPOSER_NOT_EMPTY" then error "Refusing to overwrite an existing ChatGPT draft"
 	if preflight does not start with "READY|" then error "Unexpected preflight state: " & preflight
 
