@@ -11,6 +11,15 @@ The coordinator is a bridge, not the product manager.
 - Specialist agents research, propose, challenge, implement, validate, and supervise work for the Diet Tracking and Door Access projects.
 - The coordinator must **not invent prompts, product requirements, or decisions**. It transports Commander-approved task payloads and agent responses.
 
+## Simplicity rule
+
+This is a side-project tool. Prefer the smallest design that reliably solves the current workflow.
+
+- Do not add distributed systems, services, queues, databases, abstractions, or frameworks unless the current local CLI actually needs them.
+- Prefer one local process, simple files/state, and direct browser automation.
+- Add complexity only after a concrete failure or requirement proves it is needed.
+- A working narrow vertical slice is preferred over a general orchestration platform.
+
 ## Core workflow
 
 1. Commander creates/approves a work item.
@@ -23,6 +32,21 @@ The coordinator is a bridge, not the product manager.
 8. Engineering + Validation run all required checks locally on the user's Mac.
 9. Supervisor independently checks evidence, scope, gate integrity, and consensus record.
 10. Commander makes the final decision.
+
+## Usage tracking
+
+Track lightweight per-message and per-session usage locally.
+
+For browser-based ChatGPT sessions, treat token counts as **estimates of visible transported text**, not authoritative model billing/context usage, unless the browser interface exposes a trustworthy count.
+
+Store at most:
+- input/output character counts;
+- estimated input/output tokens;
+- project, team/chat, work item, and session totals;
+- estimation method/version;
+- whether a count is estimated or authoritative.
+
+Do not add a remote analytics service just for this.
 
 ## Global operating rules
 
