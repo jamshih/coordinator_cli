@@ -310,8 +310,6 @@ on verifiedActiveSnapshot(expectedID, expectedURL)
 	return {actualTitle, actualURL, actualID}
 end verifiedActiveSnapshot
 
-on executeVerifiedJavaScr
-
 -- Content transport does not depend on the globally front Brave window.
 -- Resolve the unique canonical URL twice, then address the exact owning window
 -- and tab by their stable IDs. This lets RDC/browser work continue even when
