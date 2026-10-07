@@ -106,7 +106,9 @@ on findTitleMatches(wantedTitle)
 				set currentTab to tab ti of window wi
 				set tTitle to title of currentTab
 				set tURL to URL of currentTab
-				if my isChatGPTURL(tURL) and my titleMatches(tTitle, wantedTitle) then set end of matches to {wi, ti, tTitle, tURL}
+				set tID to id of currentTab
+				set tLoading to loading of currentTab
+				if my isChatGPTURL(tURL) and my titleMatches(tTitle, wantedTitle) then set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
 			end repeat
 		end repeat
 	end tell
@@ -121,12 +123,33 @@ on findURLMatches(wantedURL)
 				set currentTab to tab ti of window wi
 				set tTitle to title of currentTab
 				set tURL to URL of currentTab
-				if tURL is wantedURL then set end of matches to {wi, ti, tTitle, tURL}
+				set tID to id of currentTab
+				set tLoading to loading of currentTab
+				if tURL is wantedURL then set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
 			end repeat
 		end repeat
 	end tell
 	return matches
 end findURLMatches
+
+on findTabByID(wantedID)
+	set matches to {}
+	tell application "Brave Browser"
+		repeat with wi from 1 to (count of windows)
+			repeat with ti from 1 to (count of tabs of window wi)
+				set currentTab to tab ti of window wi
+				set tID to id of currentTab
+				if (tID as text) is (wantedID as text) then
+					set tTitle to title of currentTab
+					set tURL to URL of currentTab
+					set tLoading to loading of currentTab
+					set end of matches to {wi, ti, tTitle, tURL, tID, tLoading}
+				end if
+			end repeat
+		end repeat
+	end tell
+	return matches
+end findTabByID
 
 on requireUniqueTitleMatch(wantedTitle)
 	set matches to my findTitleMatches(wantedTitle)
@@ -158,17 +181,57 @@ end activateMatch
 
 on ensureCanonicalURL(wantedURL)
 	if not my isChatGPTURL(wantedURL) then error "Refusing non-ChatGPT URL: " & wantedURL
+
 	set matches to my findURLMatches(wantedURL)
 	if (count of matches) = 1 then return my activateMatch(item 1 of matches)
 	if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
+
 	tell application "Brave Browser"
 		if (count of windows) = 0 then make new window
 		set newTab to make new tab at end of tabs of front window with properties {URL:wantedURL}
+		set createdTabID to id of newTab
 		set active tab index of front window to (count of tabs of front window)
 		activate
-		delay 1
-		return (title of newTab) & tab & (URL of newTab)
 	end tell
+
+	set lastObservedURL to "<not observed>"
+	set lastObservedLoading to "<unknown>"
+
+	repeat with attempt from 1 to 40
+		delay 0.25
+
+		set matches to my findURLMatches(wantedURL)
+		if (count of matches) > 1 then
+			error "Ambiguous canonical URL after reopen; " & (count of matches) & " tabs match: " & wantedURL
+		end if
+
+		set trackedTabs to my findTabByID(createdTabID)
+		if (count of trackedTabs) = 0 then
+			if (count of matches) = 1 then
+				error "Created tab was replaced or disappeared before verification; requested canonical URL exists in a different tab. Refusing ambiguous success for: " & wantedURL
+			end if
+			error "Created tab was closed, replaced, or otherwise disappeared before canonical URL verification: " & wantedURL
+		end if
+		if (count of trackedTabs) > 1 then error "Unexpected duplicate tab ID while verifying canonical URL"
+
+		set trackedTab to item 1 of trackedTabs
+		set lastObservedURL to item 4 of trackedTab
+		set lastObservedLoading to item 6 of trackedTab
+
+		if (count of matches) = 1 then
+			set exactMatch to item 1 of matches
+			if ((item 5 of exactMatch) as text) is not (createdTabID as text) then
+				error "Redirect/replacement ambiguity: requested canonical URL appeared in a different tab while the created tab remained at: " & lastObservedURL
+			end if
+			if lastObservedLoading is false then
+				return my activateMatch(exactMatch)
+			end if
+		else if (lastObservedLoading is false) and (lastObservedURL is not wantedURL) then
+			error "Redirect ambiguity: created tab finished loading at " & lastObservedURL & " instead of requested canonical URL " & wantedURL
+		end if
+	end repeat
+
+	error "Timed out verifying reopened canonical URL after 10 seconds. Created tab still observed at " & lastObservedURL & " (loading=" & (lastObservedLoading as text) & "); requested " & wantedURL
 end ensureCanonicalURL
 
 on openNewChat()
