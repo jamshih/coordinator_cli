@@ -213,6 +213,87 @@ osascript research/brave_chatgpt_poc.applescript list-chatgpt | grep -F "$CHAT_U
 
 The acceptance condition is unchanged: `ensure-url` may succeed only after a single durable exact canonical-URL match exists for the stable created-tab ID. A transient `-1719` must be absorbed as a discarded scan, not returned to the caller and not treated as evidence of success.
 
+## Team S final-blocker repair
+
+The final Team S review of candidate `6c50be45630ed439fe74f2ae11609041ec30a975` found three remaining code-level blockers. The revised POC keeps the same AppleScript + Brave JavaScript-from-Apple-Events architecture and changes only identity/correlation checks.
+
+### 1. Canonical content operations re-verify active identity
+
+Canonical lookup records include the stable Brave tab ID and exact canonical ChatGPT URL. Captured numeric window/tab indices may be used only as a best-effort focus hint.
+
+Before JavaScript content access, clipboard paste, or Send click, the POC now re-checks the **active Brave tab object** and requires both:
+
+- stable Brave tab ID equals the expected tab ID;
+- URL equals the exact expected canonical conversation URL.
+
+Any ID mismatch, URL mismatch, missing tab/window, or tab mutation fails closed. A stale numeric index is never authorization for read/send.
+
+### 2. Title-only content operations are disabled
+
+Titles remain discovery/indexing metadata.
+
+- `activate-title` remains available as a discovery/focus aid.
+- `latest-title` now fails with an instruction to use `latest-url`.
+- `send-title` now fails with an instruction to use `send-url`.
+
+Real content reads and sends therefore require canonical URL binding.
+
+### 3. sendAndWait retains user-turn ownership
+
+After the submitted user turn is verified, the POC captures the exact visible user-turn sequence as JSON plus the expected user-turn count.
+
+During every response-wait poll it now requires:
+
+- user-turn count remains exactly baseline + 1;
+- the complete visible user-turn sequence remains byte-for-byte unchanged;
+- stable Brave tab ID and exact canonical URL remain verified before each DOM observation.
+
+If another user turn appears, a tracked user turn changes, or canonical ownership changes, the POC aborts and refuses to return the latest assistant response.
+
+### Exact local validation
+
+Checkout the immutable candidate SHA recorded on Issue #2, then set a disposable/safe canonical ChatGPT test conversation URL:
+
+```bash
+cd ~/coordinator_cli
+git fetch origin team-r/brave-feasibility-poc
+git switch --detach <IMMUTABLE_SHA>
+
+CHAT_URL='https://chatgpt.com/c/...'
+```
+
+Syntax and identity smoke:
+
+```bash
+osacompile -o /tmp/team-r-poc.scpt research/brave_chatgpt_poc.applescript
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript latest-url "$CHAT_URL"
+```
+
+Title-only content operations must fail:
+
+```bash
+osascript research/brave_chatgpt_poc.applescript latest-title "Some Chat Title"
+osascript research/brave_chatgpt_poc.applescript send-title "Some Chat Title" "MUST_NOT_SEND"
+```
+
+Harmless send/receive:
+
+```bash
+TEST_TEXT='TEAM_R_POC_SEND_TEST_20261007 — reply only with POC_OK'
+osascript research/brave_chatgpt_poc.applescript send-url "$CHAT_URL" "$TEST_TEXT"
+```
+
+Acceptance evidence must show the supplied text was submitted once and the corresponding completed assistant response was returned.
+
+Additional live checks:
+
+- create a non-empty composer draft, then verify `send-url` refuses without overwriting/sending it;
+- while ChatGPT is generating, verify a second `send-url` refuses with the busy-state guard where practical;
+- after a tracked send is accepted, introduce an additional/manual user turn before response extraction and verify the original invocation aborts with a manual/concurrent-interference error rather than returning a later assistant response.
+
+These are POC validation steps only; no queue, daemon, service, database, Playwright, CDP, or Accessibility dependency is introduced.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
