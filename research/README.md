@@ -305,6 +305,96 @@ While preparing the required live send/receive proof, the current ChatGPT page o
 
 The POC now keeps the original selectors and adds these as narrow fallbacks. This is compatibility maintenance only; it does not change canonical identity, routing, polling, or correlation semantics.
 
+## RDC-first Diet Team B production-like failure and canonical rebind repair
+
+A real RDC-first Diet Commander handoff exposed a new failure on the canonical-identity path.
+
+### Observed Diet Team B failure
+
+The helper discovered the exact canonical Diet Team B conversation URL, but content access failed closed with:
+
+```text
+Canonical target tab ID changed before content access; refusing operation
+```
+
+No wrong-chat message was sent.
+
+Read-only diagnostics on Air.local established the actual local state:
+
+- Diet Team B canonical URL remained present before and after the failure;
+- its Brave tab ID remained `532313995` before and after;
+- the globally front Brave tab remained Team R with tab ID `532314160`.
+
+Therefore the observed Diet Team B failure was **not** a real Diet Team B tab replacement. It was a focus/authorization bug: the helper attempted to bring the owning Brave window forward, but then authorized against `active tab of front window`, which could still refer to another Brave window.
+
+### Can Chromium legitimately replace a tab while preserving the canonical URL?
+
+Yes in principle. Chromium has navigation/preloading paths that create a separate `WebContents` for new-tab prerendering and later adopt/swap prerendered contents on activation. A browser-exposed tab/WebContents identity therefore cannot be assumed permanently immutable across navigation even when the final URL is unchanged.
+
+This does **not** mean ChatGPT caused the observed Diet Team B failure. The exact Diet reproduction showed the same tab ID before and after. The rebind rule exists because a legitimate replacement is possible in the Chromium architecture, not because replacement was observed in this incident.
+
+### Smallest safe rebind rule
+
+The durable identity remains the exact canonical conversation URL.
+
+A previously observed tab ID is a current binding, not permanent authorization.
+
+For every canonical content operation:
+
+1. rescan the complete Brave tab set;
+2. require exactly one exact canonical URL match;
+3. if the previous tab ID still exists:
+   - it must still own that exact canonical URL;
+   - otherwise fail closed;
+4. if the previous tab ID disappeared:
+   - permit a candidate rebind only to the one unique exact canonical URL match;
+5. immediately repeat canonical proof before content access / Send;
+6. address the owning Brave window and tab by the freshly proven stable window ID + tab ID;
+7. immediately re-read that target's exact URL and ID before the action;
+8. abort on duplicate canonical URLs, URL change, old-ID conflict, target disappearance, tab-set mutation, or any ambiguity.
+
+Numeric window/tab positions are scan metadata or local focus hints only. They never authorize content.
+
+### Content transport no longer depends on the globally front Brave window
+
+For JavaScript reads and Send clicks, the helper now re-resolves the unique canonical binding twice, then addresses:
+
+- the exact owning Brave window by stable window ID;
+- the exact tab by stable tab ID.
+
+For paste, the helper makes that exact tab active **within its already-proven owning window**, verifies the local active tab's canonical URL + ID, and only then pastes.
+
+This allows RDC/browser coordination to continue safely even if another Brave window or macOS Space is globally front.
+
+### Real Diet Team B evidence
+
+On Air.local, the revised code was exercised against:
+
+```text
+Diet Team B
+https://chatgpt.com/g/g-p-6ac5e7137230819188bbfe8ddedc6c07-diet/c/6ac5720f-2028-83ee-95c7-5511f9334b1b
+```
+
+Read-only reproduction after repair:
+
+- exact canonical URL found;
+- `activate-url`: PASS;
+- `latest-url`: PASS;
+- Diet Team B tab ID stayed `532313995`.
+
+Cross-window harmless send:
+
+1. Team R was made the front Brave conversation;
+2. Diet Team B remained in another Brave window;
+3. `send-url` targeted the exact Diet Team B canonical URL;
+4. supplied text:
+   `TEAM_R_CANONICAL_REBIND_TEST_20261007 - reply only with POC_OK`;
+5. helper returned:
+   `POC_OK`;
+6. after completion, Diet Team B was still the unique canonical match at tab ID `532313995`.
+
+No title-only or numeric-index authorization was introduced.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
