@@ -395,6 +395,106 @@ Cross-window harmless send:
 
 No title-only or numeric-index authorization was introduced.
 
+## RDC-first Diet Team B canonical-target repair
+
+A production-like RDC-first Diet Commander handoff exposed a new failure in candidate `d4c2825abfde6e86de75adbca16cd275bd67dba2`.
+
+### Observed failure and root cause
+
+The helper discovered the exact Diet Team B canonical conversation URL, then failed closed with a tab-ID mismatch before content access.
+
+Read-only RDC diagnostics proved that this specific failure was **not** a Brave/ChatGPT tab replacement:
+
+- Diet Team B canonical tab ID before helper activation: `532313995`;
+- Diet Team B canonical tab ID after the helper failure: `532313995`;
+- exact canonical URL remained unchanged.
+
+The actual target window simply did not become Brave's globally front window. The old helper then verified `active tab of front window`, saw another chat, and correctly failed closed.
+
+A second read-only test reproduced the same issue when trying to switch back to Team R: Team R retained stable ID `532314160`, but its window could not be made globally front from the current macOS window/Space state.
+
+Therefore **global front-window state is not a reliable transport prerequisite**.
+
+During follow-up validation, another scanner race was also observed: a live numeric-index scan could read a canonical URL from one tab and, after Brave mutated the tab collection, read the ID from another tab. This produced a bogus unrelated tab ID. Canonical authorization scans therefore cannot be assembled from live numeric-index object specifiers.
+
+### Can Chromium legitimately replace a tab ID?
+
+Yes. Chromium exposes tab-replacement events where one tab ID is replaced by another, commonly due to prerender activation. Therefore a tab ID is a useful current binding but is not the durable conversation identity.
+
+For this helper:
+
+- **durable identity:** exact canonical ChatGPT conversation URL;
+- **current binding:** Brave window ID + tab ID;
+- **discovery metadata:** human-readable title;
+- **never authorization:** numeric window/tab position.
+
+### Smallest safe rebind rule
+
+A previous tab ID may rebind only when all of these conditions hold:
+
+1. one stable scan finds **exactly one** tab at the expected canonical URL;
+2. if the previous tab ID still exists, it must still belong to that exact canonical URL and must be the unique URL match;
+3. if the previous tab ID is absent, the single exact canonical URL match becomes only a **candidate replacement binding**;
+4. the canonical URL is immediately resolved again using the candidate's current tab ID;
+5. the owning Brave window and tab are addressed by stable IDs, not numeric position;
+6. immediately before the read/paste/Send action, that exact tab object must still report the expected canonical URL and current bound tab ID;
+7. duplicate canonical URLs, previous ID surviving at a different URL, URL change, disappearance, scan mutation, or object-resolution failure all fail closed.
+
+Numeric tab index is used only as a local focus hint for `paste selection` inside the already-identified owning window. After that hint is applied, the active tab **inside that window** must immediately re-prove the canonical URL + bound tab ID before paste.
+
+### No global-front requirement for content transport
+
+RDC tests proved Brave can:
+
+- execute JavaScript directly on an exact canonical ChatGPT tab while another Brave tab/window is globally front;
+- paste into an exact canonical ChatGPT tab while another unrelated page remains globally front.
+
+Therefore `latest-url` and `send-url` now operate directly on the verified canonical tab object. They do not authorize content operations from `active tab of front window`.
+
+`activate-url` remains a UI-focus helper and may still fail closed when macOS window/Space behavior prevents a target window becoming globally front. Browser-agent read/send transport does not depend on that UI-focus behavior.
+
+### Stable authorization scan
+
+The canonical scanner now:
+
+- snapshots Brave window IDs;
+- snapshots each window's tab-ID list;
+- resolves each window and tab back by stable ID before reading title/URL/loading;
+- re-reads tab ID + URL after the properties;
+- verifies each tab-ID list is unchanged at the end of that window scan;
+- verifies the global window-ID list is unchanged at the end of the scan;
+- discards the entire snapshot on `-1719`, `-1728`, ID-list mutation, ID change, or URL change;
+- retries only the **pre-action discovery/re-resolution** scan, never a potentially ambiguous Send action.
+
+This prevents a URL from one tab and an ID from another tab being combined into one authorization record.
+
+### Local evidence on Air.local
+
+The real Diet Team B canonical URL was used through Remote Desktop Commander.
+
+Read-only evidence:
+
+- candidate `d4c2825...` reproduced the production-like fail-closed mismatch;
+- Diet Team B remained tab ID `532313995` before and after, proving the failure was helper focus logic rather than replacement;
+- direct canonical JavaScript read worked on a non-front Team R tab with stable ID/URL;
+- direct canonical paste into Diet Team B worked while an unrelated Carousell page remained globally front; the test draft was verified and cleared without submission.
+
+On exact code commit `b7f81611c94321f8dfa98f7b2dda61bbd9213acb`:
+
+- `osacompile`: PASS;
+- canonical `latest-url` path: PASS after stable-scan repair;
+- busy-state guard: PASS — a send attempt while the exact Team B tab was busy refused before paste/Send;
+- harmless `send-url` text:
+  `TEAM_R_RDC_REBIND_TEST_20261007_D - reply only with POC_OK`
+  returned `POC_OK`;
+- independent DOM verification on the exact Diet Team B canonical tab reported:
+  - exact matching user turns: `1`;
+  - last user text: exact supplied test text;
+  - last assistant: `POC_OK`;
+  - busy: `false`.
+
+The immutable candidate SHA recorded on Issue #2 must be retested after this documentation-only commit before Team R calls the evidence exact-SHA final.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
