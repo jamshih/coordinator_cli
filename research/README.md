@@ -57,6 +57,9 @@ Copy the URL for a discovered chat, then prove canonical targeting:
 CHAT_URL='https://chatgpt.com/c/...'
 osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
 osascript research/brave_chatgpt_poc.applescript latest-url "$CHAT_URL"
+
+# Close that tab, then prove the canonical URL can reacquire it:
+osascript research/brave_chatgpt_poc.applescript ensure-url "$CHAT_URL"
 ```
 
 Reorder Brave tabs and repeat `activate-url`; the POC re-scans all windows/tabs, so tab order should not matter.
@@ -73,8 +76,9 @@ osascript research/brave_chatgpt_poc.applescript send-url "$CHAT_URL" "TEAM_R_PO
 ```
 
 The command refuses to send if:
-- the canonical URL resolves to zero or multiple open tabs;
+- the canonical URL resolves to zero or multiple open tabs when using send-url;
 - the target is not `chatgpt.com`;
+- ChatGPT is already generating;
 - the composer already contains a draft;
 - the pasted text does not exactly match the supplied argument;
 - the send button is not ready;
@@ -102,9 +106,11 @@ Paste the exact stdout/stderr and exit status into Issue #2 for:
 4. title activation;
 5. canonical-URL activation before/after tab reorder;
 6. canonical-URL activation before/after chat rename;
-7. harmless send/receive probe;
-8. one intentional duplicate-title failure, if easy to create;
-9. one non-empty-draft refusal.
+7. close the tab and reacquire it with `ensure-url`;
+8. harmless send/receive probe;
+9. one intentional duplicate-title failure, if easy to create;
+10. one non-empty-draft refusal;
+11. one send-while-generating refusal.
 
 Do not post unrelated tab URLs, private chat contents, cookies, tokens, or secrets.
 
