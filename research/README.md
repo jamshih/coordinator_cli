@@ -190,7 +190,7 @@ All other errors still propagate. Existing fail-closed rules for disappearance/r
 
 ```bash
 git fetch origin team-r/brave-feasibility-poc
-git switch --detach REVISED_SHA
+git switch --detach 7d40bfea861e4ef80c478695be58c6ce585be1c4
 
 CHAT_URL='https://chatgpt.com/c/...'
 
