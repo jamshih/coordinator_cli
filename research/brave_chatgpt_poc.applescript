@@ -207,10 +207,19 @@ end requireUniqueTitleMatch
 
 on requireUniqueURLMatch(wantedURL)
 	if not my isChatGPTURL(wantedURL) then error "Refusing non-ChatGPT URL: " & wantedURL
-	set matches to my findURLMatches(wantedURL)
-	if (count of matches) = 0 then error "No open tab matched canonical URL: " & wantedURL
-	if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
-	return item 1 of matches
+	repeat with attempt from 1 to 30
+		set scanResult to my scanVerificationState(wantedURL, "__TEAM_R_NO_TAB_ID__")
+		if item 1 of scanResult is true then
+			set matches to item 2 of scanResult
+			if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
+			if (count of matches) = 1 then return item 1 of matches
+		end if
+		-- A legitimate Chromium replacement can briefly leave no visible
+		-- canonical tab. This is pre-action discovery only, so bounded rescan
+		-- is safe; no content action is retried.
+		delay 0.1
+	end repeat
+	error "No open tab matched canonical URL after bounded re-resolution: " & wantedURL
 end requireUniqueURLMatch
 
 on activateMatch(theMatch)
@@ -261,38 +270,39 @@ on activateCanonicalMatch(theMatch)
 end activateCanonicalMatch
 
 on resolveCanonicalIdentity(expectedID, expectedURL)
-	set verificationScan to missing value
-	repeat with attempt from 1 to 10
-		set candidateScan to my scanVerificationState(expectedURL, expectedID)
-		if item 1 of candidateScan is true then
-			set verificationScan to candidateScan
-			exit repeat
+	repeat with attempt from 1 to 30
+		set verificationScan to my scanVerificationState(expectedURL, expectedID)
+		if item 1 of verificationScan is true then
+			set urlMatches to item 2 of verificationScan
+			set idMatches to item 3 of verificationScan
+
+			if (count of urlMatches) > 1 then error "Ambiguous canonical URL during identity re-resolution; refusing operation"
+			if (count of idMatches) > 1 then error "Ambiguous canonical tab ID during identity re-resolution; refusing operation"
+
+			if (count of idMatches) = 1 then
+				set idMatch to item 1 of idMatches
+				if (item 4 of idMatch) is not expectedURL then error "Previous canonical tab ID still exists at a different URL; refusing rebind"
+			end if
+
+			if (count of urlMatches) = 1 then
+				set urlMatch to item 1 of urlMatches
+				if (count of idMatches) = 1 then
+					if ((item 5 of urlMatch) as text) is not (expectedID as text) then error "Canonical URL conflicts with the still-live previous tab ID; refusing operation"
+				end if
+				-- If idMatches is empty, the old ID disappeared and this single
+				-- exact canonical URL is the candidate replacement binding.
+				return urlMatch
+			end if
+
+			-- Zero URL matches are tolerated only while the previous ID is also
+			-- absent. If the old ID still exists, the URL check above would have
+			-- rejected any navigation away from the canonical conversation.
 		end if
-		delay 0.05
+		delay 0.1
 	end repeat
-	if verificationScan is missing value then error "Canonical target kept mutating during identity re-resolution; refusing operation"
 
-	set urlMatches to item 2 of verificationScan
-	set idMatches to item 3 of verificationScan
-	if (count of urlMatches) is not 1 then
-		if (count of urlMatches) = 0 then error "Canonical target URL disappeared during identity re-resolution; refusing operation"
-		error "Ambiguous canonical URL during identity re-resolution; refusing operation"
-	end if
-	if (count of idMatches) > 1 then error "Ambiguous canonical tab ID during identity re-resolution; refusing operation"
-
-	set urlMatch to item 1 of urlMatches
-	if (count of idMatches) = 1 then
-		set idMatch to item 1 of idMatches
-		if (item 4 of idMatch) is not expectedURL then error "Previous canonical tab ID still exists at a different URL; refusing rebind"
-		if ((item 5 of urlMatch) as text) is not (expectedID as text) then error "Canonical URL conflicts with the still-live previous tab ID; refusing operation"
-	end if
-
-	-- If idMatches is empty, the old tab ID disappeared. A single exact
-	-- canonical URL is sufficient to form a candidate replacement binding;
-	-- active-tab verification is still required before any content access.
-	return urlMatch
+	error "Canonical target disappeared during bounded identity re-resolution; refusing operation"
 end resolveCanonicalIdentity
-
 on verifiedActiveSnapshot(expectedID, expectedURL)
 	-- One consistent Brave snapshot proves uniqueness and whether the previous
 	-- tab ID still exists. A disappeared old ID may rebind only to the single
