@@ -215,17 +215,23 @@ on activateCanonicalMatch(theMatch)
 	set expectedURL to item 4 of theMatch
 	set expectedID to item 5 of theMatch
 
-	-- Re-resolve the expected stable identity immediately before focus so the
-	-- numeric indices are only a fresh focus hint, never authorization.
+	-- Re-resolve by canonical URL immediately before focus. The old tab ID is
+	-- a binding hint only: if Chromium legitimately replaced that tab, a new
+	-- ID may be accepted only after the old ID is absent and the canonical URL
+	-- is still unique.
 	set freshMatch to my resolveCanonicalIdentity(expectedID, expectedURL)
 	set wi to item 1 of freshMatch
 	set ti to item 2 of freshMatch
 
 	try
 		tell application "Brave Browser"
-			set active tab index of window wi to ti
-			set index of window wi to 1
+			-- Capture the window object before changing focus. Re-addressing
+			-- "window wi" after activation/reordering can refer to a different
+			-- numeric position.
+			set targetWindow to window wi
+			set active tab index of targetWindow to ti
 			activate
+			set index of targetWindow to 1
 		end tell
 	on error errText number errNum
 		if errNum is -1719 then error "Canonical target mutated during focus; refusing stale numeric-index activation"
@@ -246,19 +252,45 @@ on resolveCanonicalIdentity(expectedID, expectedURL)
 		if (count of urlMatches) = 0 then error "Canonical target URL disappeared during identity re-resolution; refusing operation"
 		error "Ambiguous canonical URL during identity re-resolution; refusing operation"
 	end if
-	if (count of idMatches) is not 1 then
-		if (count of idMatches) = 0 then error "Canonical target tab ID disappeared during identity re-resolution; refusing operation"
-		error "Ambiguous canonical tab ID during identity re-resolution; refusing operation"
-	end if
+	if (count of idMatches) > 1 then error "Ambiguous canonical tab ID during identity re-resolution; refusing operation"
 
 	set urlMatch to item 1 of urlMatches
-	set idMatch to item 1 of idMatches
-	if ((item 5 of urlMatch) as text) is not (expectedID as text) then error "Canonical URL now belongs to a different tab ID; refusing operation"
-	if (item 4 of idMatch) is not expectedURL then error "Canonical tab ID now points at a different URL; refusing operation"
+	if (count of idMatches) = 1 then
+		set idMatch to item 1 of idMatches
+		if (item 4 of idMatch) is not expectedURL then error "Previous canonical tab ID still exists at a different URL; refusing rebind"
+		if ((item 5 of urlMatch) as text) is not (expectedID as text) then error "Canonical URL conflicts with the still-live previous tab ID; refusing operation"
+	end if
+
+	-- If idMatches is empty, the old tab ID disappeared. A single exact
+	-- canonical URL is sufficient to form a candidate replacement binding;
+	-- active-tab verification is still required before any content access.
 	return urlMatch
 end resolveCanonicalIdentity
 
 on verifiedActiveSnapshot(expectedID, expectedURL)
+	-- One consistent Brave snapshot proves uniqueness and whether the previous
+	-- tab ID still exists. A disappeared old ID may rebind only to the single
+	-- exact canonical URL that is also the active front tab.
+	set verificationScan to my scanVerificationState(expectedURL, expectedID)
+	if item 1 of verificationScan is false then error "Canonical target mutated during active-tab verification; refusing content access"
+	set urlMatches to item 2 of verificationScan
+	set idMatches to item 3 of verificationScan
+
+	if (count of urlMatches) is not 1 then
+		if (count of urlMatches) = 0 then error "Canonical target URL disappeared before content access; refusing operation"
+		error "Ambiguous canonical URL before content access; refusing operation"
+	end if
+	if (count of idMatches) > 1 then error "Ambiguous previous tab ID before content access; refusing operation"
+
+	set canonicalMatch to item 1 of urlMatches
+	set reboundID to item 5 of canonicalMatch
+
+	if (count of idMatches) = 1 then
+		set oldMatch to item 1 of idMatches
+		if (item 4 of oldMatch) is not expectedURL then error "Previous canonical tab ID still exists at a different URL; refusing rebind"
+		if (reboundID as text) is not (expectedID as text) then error "Canonical URL conflicts with still-live previous tab ID; refusing operation"
+	end if
+
 	try
 		tell application "Brave Browser"
 			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
@@ -272,20 +304,21 @@ on verifiedActiveSnapshot(expectedID, expectedURL)
 		error errText number errNum
 	end try
 
-	if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed before content access; refusing operation"
-	if actualURL is not expectedURL then error "Canonical target URL changed before content access; refusing operation"
+	if actualURL is not expectedURL then error "Active tab is not the unique canonical conversation; refusing operation"
+	if (actualID as text) is not (reboundID as text) then error "Active tab does not match the unique canonical URL binding; refusing operation"
 	return {actualTitle, actualURL, actualID}
 end verifiedActiveSnapshot
 
 on executeVerifiedJavaScript(expectedID, expectedURL, jsText)
+	set binding to my verifiedActiveSnapshot(expectedID, expectedURL)
+	set boundID to item 3 of binding
 	try
 		tell application "Brave Browser"
-			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
 			set currentTab to active tab of front window
 			set actualID to id of currentTab
 			set actualURL to URL of currentTab
-			if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed immediately before JavaScript; refusing operation"
-			if actualURL is not expectedURL then error "Canonical target URL changed immediately before JavaScript; refusing operation"
+			if actualURL is not expectedURL then error "Canonical URL changed immediately before JavaScript; refusing operation"
+			if (actualID as text) is not (boundID as text) then error "Canonical tab binding changed immediately before JavaScript; refusing operation"
 			tell currentTab to return execute javascript jsText
 		end tell
 	on error errText number errNum
@@ -295,14 +328,15 @@ on executeVerifiedJavaScript(expectedID, expectedURL, jsText)
 end executeVerifiedJavaScript
 
 on pasteVerifiedSelection(expectedID, expectedURL)
+	set binding to my verifiedActiveSnapshot(expectedID, expectedURL)
+	set boundID to item 3 of binding
 	try
 		tell application "Brave Browser"
-			if (count of windows) = 0 then error "No Brave window exists while verifying canonical target"
 			set currentTab to active tab of front window
 			set actualID to id of currentTab
 			set actualURL to URL of currentTab
-			if (actualID as text) is not (expectedID as text) then error "Canonical target tab ID changed immediately before paste; refusing operation"
-			if actualURL is not expectedURL then error "Canonical target URL changed immediately before paste; refusing operation"
+			if actualURL is not expectedURL then error "Canonical URL changed immediately before paste; refusing operation"
+			if (actualID as text) is not (boundID as text) then error "Canonical tab binding changed immediately before paste; refusing operation"
 			tell currentTab to paste selection
 		end tell
 	on error errText number errNum
