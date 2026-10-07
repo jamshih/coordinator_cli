@@ -512,8 +512,12 @@ on sendAndWait(theMatch, messageText)
 	my pasteVerifiedSelection(expectedTabID, canonicalURL)
 	delay 0.3
 
-	set pastedText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); return c ? c.innerText : ''; })()")
-	if pastedText is not messageText then error "Paste verification failed; message was NOT submitted"
+	-- ChatGPT's ProseMirror may render pasted URLs as rich-link widgets.
+	-- innerText is CSS/layout-sensitive and can insert visual newlines that
+	-- were not present in the clipboard payload. Reconstruct logical editor
+	-- text from DOM text nodes plus explicit <br> nodes instead.
+	set pastedText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return ''; let out=''; const walk=n=>{ if(n.nodeType===Node.TEXT_NODE){out+=n.nodeValue||'';return;} if(n.nodeType===Node.ELEMENT_NODE&&n.tagName==='BR'){out+='\\n';return;} for(const ch of n.childNodes) walk(ch); }; walk(c); return out; })()")
+	if pastedText is not messageText then error "Paste verification failed; message was NOT submitted and draft ownership is ambiguous"
 
 	set sendJS to "(() => { const b=document.querySelector('#composer-submit-button,[data-testid=send-button],button[aria-label=\"Send\"]'); if(!b || b.disabled) return 'SEND_NOT_READY'; b.click(); return 'SENT'; })()"
 	set sendState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, sendJS)
