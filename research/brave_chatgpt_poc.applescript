@@ -367,7 +367,7 @@ on latestForMatch(theMatch)
 end latestForMatch
 
 on latestForActiveCanonical(expectedID, expectedURL)
-	set js to "(() => { const a=[...document.querySelectorAll('[data-message-author-role=assistant]')]; if(!a.length) return ''; const last=a[a.length-1]; const md=last.querySelector('.markdown'); return (md||last).innerText.trim(); })()"
+	set js to "(() => { let a=[...document.querySelectorAll('[data-message-author-role=assistant]')]; if(!a.length) a=[...document.querySelectorAll('h4[data-conversation-role=assistant]')].map(h=>h.parentElement); if(!a.length) return ''; const last=a[a.length-1]; const md=last.querySelector('.markdown'); if(md) return md.innerText.trim(); const marker=last.querySelector('h4[data-conversation-role=assistant]'); const body=marker?.nextElementSibling; return (body||last).innerText.trim(); })()"
 	return my executeVerifiedJavaScript(expectedID, expectedURL, js)
 end latestForActiveCanonical
 
@@ -376,7 +376,7 @@ on sendAndWait(theMatch, messageText)
 	set expectedTabID to item 5 of theMatch
 	my activateCanonicalMatch(theMatch)
 
-	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; if(document.querySelector('button[data-testid=stop-button]')) return 'BUSY_GENERATING'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; return 'READY|' + a + '|' + u; })()"
+	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; if(document.querySelector('button[data-testid=stop-button],button[aria-label=\"Stop\"],button[aria-label=\"Stop generating\"],button[aria-label=\"Stop streaming\"]')) return 'BUSY_GENERATING'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); let a=document.querySelectorAll('[data-message-author-role=assistant]').length; if(!a) a=document.querySelectorAll('h4[data-conversation-role=assistant]').length; let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; return 'READY|' + a + '|' + u; })()"
 	set preflight to my executeVerifiedJavaScript(expectedTabID, canonicalURL, preflightJS)
 	if preflight is "NO_COMPOSER" then error "ChatGPT composer not found; DOM may have changed or the page is not ready"
 	if preflight is "BUSY_GENERATING" then error "Refusing to send while ChatGPT is already generating"
@@ -397,17 +397,17 @@ on sendAndWait(theMatch, messageText)
 	set pastedText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); return c ? c.innerText : ''; })()")
 	if pastedText is not messageText then error "Paste verification failed; message was NOT submitted"
 
-	set sendJS to "(() => { const b=document.querySelector('#composer-submit-button,[data-testid=send-button]'); if(!b || b.disabled) return 'SEND_NOT_READY'; b.click(); return 'SENT'; })()"
+	set sendJS to "(() => { const b=document.querySelector('#composer-submit-button,[data-testid=send-button],button[aria-label=\"Send\"]'); if(!b || b.disabled) return 'SEND_NOT_READY'; b.click(); return 'SENT'; })()"
 	set sendState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, sendJS)
 	if sendState is not "SENT" then error "Message was NOT submitted: " & sendState
 
 	set userTurnConfirmed to false
 	repeat with attempt from 1 to 10
 		delay 0.5
-		set observedUserCount to (my executeVerifiedJavaScript(expectedTabID, canonicalURL, "document.querySelectorAll('[data-message-author-role=user]').length.toString()")) as integer
+		set observedUserCount to (my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; return u.toString(); })()")) as integer
 		if observedUserCount > expectedUserCount then error "Manual/concurrent interference detected before submitted turn confirmation; refusing response association"
 		if observedUserCount is expectedUserCount then
-			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const u=[...document.querySelectorAll('[data-message-author-role=user]')]; return u.length ? u[u.length-1].innerText.trim() : ''; })()")
+			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; return u.length ? u[u.length-1].innerText.trim() : ''; })()")
 			if lastUserText is messageText then
 				set userTurnConfirmed to true
 				exit repeat
@@ -418,14 +418,14 @@ on sendAndWait(theMatch, messageText)
 	end repeat
 	if userTurnConfirmed is false then error "Submitted user turn could not be verified; refusing to associate a later response"
 
-	set userSequenceJS to "JSON.stringify([...document.querySelectorAll('[data-message-author-role=user]')].map(n => n.innerText.trim()))"
+	set userSequenceJS to "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; return JSON.stringify(u.map(n => n.innerText.trim())); })()"
 	set ownedUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
 
 	set idleConfirmations to 0
 	repeat with attempt from 1 to 180
 		delay 1
 
-		set responseState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; const busy=!!document.querySelector('button[data-testid=stop-button]'); return a + '|' + u + '|' + (busy ? '1' : '0'); })()")
+		set responseState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let a=document.querySelectorAll('[data-message-author-role=assistant]').length; if(!a) a=document.querySelectorAll('h4[data-conversation-role=assistant]').length; let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; const busy=!!document.querySelector('button[data-testid=stop-button],button[aria-label=\"Stop\"],button[aria-label=\"Stop generating\"],button[aria-label=\"Stop streaming\"]'); return a + '|' + u + '|' + (busy ? '1' : '0'); })()")
 
 		set oldDelims to AppleScript's text item delimiters
 		set AppleScript's text item delimiters to "|"
