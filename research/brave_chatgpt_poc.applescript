@@ -1,5 +1,5 @@
 -- Team R throwaway feasibility POC.
--- Research-only: proves the smallest AppleScript + JavaScript-from-Apple-Events path.
+-- Research-only: tests the smallest AppleScript + JavaScript-from-Apple-Events path.
 -- It intentionally has no external dependencies and is not production coordinator code.
 
 on run argv
@@ -14,15 +14,24 @@ on run argv
 		return listTabs(true)
 	else if commandName is "activate-title" then
 		if (count of argv) < 2 then error "activate-title requires a chat title"
-		return activateByTitle(item 2 of argv)
+		return activateMatch(my requireUniqueTitleMatch(item 2 of argv))
+	else if commandName is "activate-url" then
+		if (count of argv) < 2 then error "activate-url requires a canonical ChatGPT URL"
+		return activateMatch(my requireUniqueURLMatch(item 2 of argv))
 	else if commandName is "new-chat" then
 		return openNewChat()
 	else if commandName is "latest-title" then
 		if (count of argv) < 2 then error "latest-title requires a chat title"
-		return latestByTitle(item 2 of argv)
+		return latestForMatch(my requireUniqueTitleMatch(item 2 of argv))
+	else if commandName is "latest-url" then
+		if (count of argv) < 2 then error "latest-url requires a canonical ChatGPT URL"
+		return latestForMatch(my requireUniqueURLMatch(item 2 of argv))
 	else if commandName is "send-title" then
 		if (count of argv) < 3 then error "send-title requires a chat title and message text"
-		return sendAndWait(item 2 of argv, item 3 of argv)
+		return sendAndWait(my requireUniqueTitleMatch(item 2 of argv), item 3 of argv)
+	else if commandName is "send-url" then
+		if (count of argv) < 3 then error "send-url requires a canonical ChatGPT URL and message text"
+		return sendAndWait(my requireUniqueURLMatch(item 2 of argv), item 3 of argv)
 	else
 		error "Unknown command: " & commandName
 	end if
@@ -33,9 +42,10 @@ on usageText()
 		"  osascript research/brave_chatgpt_poc.applescript doctor" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript list-chatgpt" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript activate-title \"Diet Team B\"" & linefeed & ¬
+		"  osascript research/brave_chatgpt_poc.applescript activate-url \"https://chatgpt.com/c/...\"" & linefeed & ¬
 		"  osascript research/brave_chatgpt_poc.applescript new-chat" & linefeed & ¬
-		"  osascript research/brave_chatgpt_poc.applescript latest-title \"Diet Team B\"" & linefeed & ¬
-		"  osascript research/brave_chatgpt_poc.applescript send-title \"Diet Team B\" \"TEAM_R_POC_TEST_20261007\""
+		"  osascript research/brave_chatgpt_poc.applescript latest-url \"https://chatgpt.com/c/...\"" & linefeed & ¬
+		"  osascript research/brave_chatgpt_poc.applescript send-url \"https://chatgpt.com/c/...\" \"TEAM_R_POC_TEST_20261007\""
 end usageText
 
 on doctor()
@@ -87,21 +97,32 @@ end titleMatches
 on findTitleMatches(wantedTitle)
 	set matches to {}
 	tell application "Brave Browser"
-		set windowCount to count of windows
-		repeat with wi from 1 to windowCount
-			set tabCount to count of tabs of window wi
-			repeat with ti from 1 to tabCount
+		repeat with wi from 1 to (count of windows)
+			repeat with ti from 1 to (count of tabs of window wi)
 				set currentTab to tab ti of window wi
 				set tTitle to title of currentTab
 				set tURL to URL of currentTab
-				if my isChatGPTURL(tURL) and my titleMatches(tTitle, wantedTitle) then
-					set end of matches to {wi, ti, tTitle, tURL}
-				end if
+				if my isChatGPTURL(tURL) and my titleMatches(tTitle, wantedTitle) then set end of matches to {wi, ti, tTitle, tURL}
 			end repeat
 		end repeat
 	end tell
 	return matches
 end findTitleMatches
+
+on findURLMatches(wantedURL)
+	set matches to {}
+	tell application "Brave Browser"
+		repeat with wi from 1 to (count of windows)
+			repeat with ti from 1 to (count of tabs of window wi)
+				set currentTab to tab ti of window wi
+				set tTitle to title of currentTab
+				set tURL to URL of currentTab
+				if tURL is wantedURL then set end of matches to {wi, ti, tTitle, tURL}
+			end repeat
+		end repeat
+	end tell
+	return matches
+end findURLMatches
 
 on requireUniqueTitleMatch(wantedTitle)
 	set matches to my findTitleMatches(wantedTitle)
@@ -109,6 +130,14 @@ on requireUniqueTitleMatch(wantedTitle)
 	if (count of matches) > 1 then error "Ambiguous ChatGPT title; " & (count of matches) & " tabs matched: " & wantedTitle
 	return item 1 of matches
 end requireUniqueTitleMatch
+
+on requireUniqueURLMatch(wantedURL)
+	if not my isChatGPTURL(wantedURL) then error "Refusing non-ChatGPT URL: " & wantedURL
+	set matches to my findURLMatches(wantedURL)
+	if (count of matches) = 0 then error "No open tab matched canonical URL: " & wantedURL
+	if (count of matches) > 1 then error "Ambiguous canonical URL; " & (count of matches) & " tabs are open for: " & wantedURL
+	return item 1 of matches
+end requireUniqueURLMatch
 
 on activateMatch(theMatch)
 	set wi to item 1 of theMatch
@@ -123,10 +152,6 @@ on activateMatch(theMatch)
 	end tell
 end activateMatch
 
-on activateByTitle(wantedTitle)
-	return my activateMatch(my requireUniqueTitleMatch(wantedTitle))
-end activateByTitle
-
 on openNewChat()
 	tell application "Brave Browser"
 		if (count of windows) = 0 then make new window
@@ -138,20 +163,19 @@ on openNewChat()
 	end tell
 end openNewChat
 
-on latestByTitle(wantedTitle)
-	set theMatch to my requireUniqueTitleMatch(wantedTitle)
+on latestForMatch(theMatch)
 	my activateMatch(theMatch)
 	set js to "(() => { const a=[...document.querySelectorAll('[data-message-author-role=assistant]')]; if(!a.length) return ''; const last=a[a.length-1]; const md=last.querySelector('.markdown'); return (md||last).innerText.trim(); })()"
 	tell application "Brave Browser"
 		tell active tab of front window to return execute javascript js
 	end tell
-end latestByTitle
+end latestForMatch
 
-on sendAndWait(wantedTitle, messageText)
-	set theMatch to my requireUniqueTitleMatch(wantedTitle)
+on sendAndWait(theMatch, messageText)
 	my activateMatch(theMatch)
+	set canonicalURL to item 4 of theMatch
 
-	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const n=document.querySelectorAll('[data-message-author-role=assistant]').length; return 'READY|' + n; })()"
+	set preflightJS to "(() => { const c=document.querySelector('#prompt-textarea,[contenteditable=true][role=textbox]'); if(!c) return 'NO_COMPOSER'; const existing=(c.innerText||'').trim(); if(existing.length) return 'COMPOSER_NOT_EMPTY'; c.focus(); c.click(); const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; return 'READY|' + a + '|' + u; })()"
 	tell application "Brave Browser"
 		tell active tab of front window to set preflight to execute javascript preflightJS
 	end tell
@@ -161,7 +185,8 @@ on sendAndWait(wantedTitle, messageText)
 
 	set oldDelims to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to "|"
-	set baselineCount to (text item 2 of preflight) as integer
+	set baselineAssistantCount to (text item 2 of preflight) as integer
+	set baselineUserCount to (text item 3 of preflight) as integer
 	set AppleScript's text item delimiters to oldDelims
 
 	set the clipboard to messageText
@@ -181,27 +206,45 @@ on sendAndWait(wantedTitle, messageText)
 	end tell
 	if sendState is not "SENT" then error "Message was NOT submitted: " & sendState
 
+	set userTurnConfirmed to false
+	repeat with attempt from 1 to 10
+		delay 0.5
+		set userJS to "(() => { const u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) return ''; return u[u.length-1].innerText.trim(); })()"
+		tell application "Brave Browser"
+			tell active tab of front window to set lastUserText to execute javascript userJS
+		end tell
+		if lastUserText is messageText then
+			set userTurnConfirmed to true
+			exit repeat
+		end if
+	end repeat
+	if userTurnConfirmed is false then error "Submitted user turn could not be verified; refusing to associate a later response"
+
 	set idleConfirmations to 0
 	repeat with attempt from 1 to 180
 		delay 1
-		set stateJS to "(() => { const n=document.querySelectorAll('[data-message-author-role=assistant]').length; const busy=!!document.querySelector('button[data-testid=stop-button]'); return n + '|' + (busy ? '1' : '0'); })()"
+		set stateJS to "(() => { const a=document.querySelectorAll('[data-message-author-role=assistant]').length; const u=document.querySelectorAll('[data-message-author-role=user]').length; const busy=!!document.querySelector('button[data-testid=stop-button]'); return a + '|' + u + '|' + (busy ? '1' : '0'); })()"
 		tell application "Brave Browser"
 			tell active tab of front window to set responseState to execute javascript stateJS
 		end tell
 
 		set oldDelims to AppleScript's text item delimiters
 		set AppleScript's text item delimiters to "|"
-		set responseCount to (text item 1 of responseState) as integer
-		set isBusy to text item 2 of responseState
+		set responseAssistantCount to (text item 1 of responseState) as integer
+		set responseUserCount to (text item 2 of responseState) as integer
+		set isBusy to text item 3 of responseState
 		set AppleScript's text item delimiters to oldDelims
 
-		if (responseCount > baselineCount) and (isBusy is "0") then
+		if (responseAssistantCount > baselineAssistantCount) and (responseUserCount > baselineUserCount) and (isBusy is "0") then
 			set idleConfirmations to idleConfirmations + 1
 		else
 			set idleConfirmations to 0
 		end if
 
-		if idleConfirmations ≥ 2 then return my latestByTitle(wantedTitle)
+		if idleConfirmations is greater than or equal to 2 then
+			set freshMatch to my requireUniqueURLMatch(canonicalURL)
+			return my latestForMatch(freshMatch)
+		end if
 	end repeat
 
 	error "Timed out waiting for a completed assistant response after 180 seconds"
