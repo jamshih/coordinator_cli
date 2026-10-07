@@ -294,6 +294,17 @@ Additional live checks:
 
 These are POC validation steps only; no queue, daemon, service, database, Playwright, CDP, or Accessibility dependency is introduced.
 
+## Current ChatGPT DOM compatibility observed during local validation
+
+While preparing the required live send/receive proof, the current ChatGPT page on the Commander's Mac exposed newer DOM markers than the original POC selectors:
+
+- Send button: `button[aria-label="Send"]`;
+- active generation control: `button[aria-label="Stop"]`;
+- user message bubble: `[data-user-message-bubble="true"]`;
+- assistant response unit: an `h4[data-conversation-role="assistant"]` marker inside the assistant unit.
+
+The POC now keeps the original selectors and adds these as narrow fallbacks. This is compatibility maintenance only; it does not change canonical identity, routing, polling, or correlation semantics.
+
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
