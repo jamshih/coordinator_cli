@@ -2,22 +2,13 @@
 
 Research-only throwaway POC for GitHub Issue #2. It deliberately uses only macOS built-ins: `osascript` + Brave's Chromium AppleScript surface.
 
-## Why this candidate
+## Candidate
 
-The POC targets the already logged-in Brave session. It does not enable a DevTools TCP port, copy cookies, launch a second browser profile, install Playwright, or introduce a daemon/service.
+**AppleScript for tab/window discovery and activation + Brave's built-in JavaScript-from-Apple-Events for ChatGPT DOM reads/actions.**
 
-It exercises:
-- enumerate Brave tabs;
-- print ChatGPT title + URL;
-- select and activate a unique ChatGPT tab by human title;
-- open a new ChatGPT tab;
-- paste a caller-supplied string without rewriting it;
-- refuse to overwrite an existing composer draft;
-- verify the pasted text before clicking Send;
-- wait for a new assistant response;
-- retrieve the latest visible assistant text.
+After initial discovery by human-readable title, use the exact ChatGPT conversation URL as the canonical target. Re-scan current windows/tabs each operation; do not persist tab indices.
 
-Title matching is intentionally fail-closed: zero or multiple matches are errors. Once a conversation URL is discovered, production code should store that URL as the canonical target and use title only for discovery/recovery.
+No CDP port, separate browser profile, Playwright install, daemon, service, database, queue, or extension is required for this POC.
 
 ## One-time Brave setting
 
@@ -45,6 +36,8 @@ node --version 2>/dev/null || true
 python3 --version 2>/dev/null || true
 ```
 
+Node and Python are informational only; the POC does not require either.
+
 ## Read-only smoke checks
 
 ```bash
@@ -58,26 +51,38 @@ Expected `list-chatgpt` columns:
 
 `window_index<TAB>tab_index<TAB>title<TAB>url`
 
-Reorder Brave tabs, rerun `list-chatgpt`, and verify title selection still activates the intended conversation.
+Copy the URL for a discovered chat, then prove canonical targeting:
 
-Rename a ChatGPT chat, wait for the tab title to update, rerun `list-chatgpt`, and verify the new title is discoverable. The canonical conversation URL should remain the same.
+```bash
+CHAT_URL='https://chatgpt.com/c/...'
+osascript research/brave_chatgpt_poc.applescript activate-url "$CHAT_URL"
+osascript research/brave_chatgpt_poc.applescript latest-url "$CHAT_URL"
+```
+
+Reorder Brave tabs and repeat `activate-url`; the POC re-scans all windows/tabs, so tab order should not matter.
+
+Rename the ChatGPT chat and repeat `activate-url`; the canonical URL should continue to target the same conversation even though the human title changed. Re-run `list-chatgpt` to discover the new title.
 
 ## Non-sensitive send/receive proof
 
 Use a dedicated test chat or another chat where this harmless probe is acceptable:
 
 ```bash
-osascript research/brave_chatgpt_poc.applescript send-title "YOUR TEST CHAT TITLE" "TEAM_R_POC_TEST_20261007 — reply only with POC_OK"
+CHAT_URL='https://chatgpt.com/c/...'
+osascript research/brave_chatgpt_poc.applescript send-url "$CHAT_URL" "TEAM_R_POC_TEST_20261007 — reply only with POC_OK"
 ```
 
 The command refuses to send if:
-- the title resolves to zero tabs;
-- the title resolves to multiple tabs;
+- the canonical URL resolves to zero or multiple open tabs;
+- the target is not `chatgpt.com`;
 - the composer already contains a draft;
 - the pasted text does not exactly match the supplied argument;
-- the send button is not ready.
+- the send button is not ready;
+- the newly submitted user turn cannot be verified.
 
-It then waits up to 180 seconds for a new assistant turn and returns visible response text.
+It snapshots user/assistant turn counts before Send, waits for a *new* assistant turn, waits for generation to become idle, then returns the latest visible assistant text.
+
+For discovery-only testing, `send-title` also exists, but URL targeting is the intended post-discovery path.
 
 ## Open-new-chat proof
 
@@ -85,21 +90,38 @@ It then waits up to 180 seconds for a new assistant turn and returns visible res
 osascript research/brave_chatgpt_poc.applescript new-chat
 ```
 
-A brand-new chat begins at `https://chatgpt.com/`. A stable conversation URL/ID normally exists only after the conversation is created by a send; production code should capture the URL after that transition.
+A brand-new chat begins at `https://chatgpt.com/`. A stable conversation URL/ID is only useful after ChatGPT creates the conversation. Production code should capture the page URL after the first successful send and persist that exact URL as the canonical registry value.
+
+## Evidence to record locally
+
+Paste the exact stdout/stderr and exit status into Issue #2 for:
+
+1. environment capture;
+2. `doctor`;
+3. `list-chatgpt`;
+4. title activation;
+5. canonical-URL activation before/after tab reorder;
+6. canonical-URL activation before/after chat rename;
+7. harmless send/receive probe;
+8. one intentional duplicate-title failure, if easy to create;
+9. one non-empty-draft refusal.
+
+Do not post unrelated tab URLs, private chat contents, cookies, tokens, or secrets.
 
 ## Known POC limitations
 
 - ChatGPT DOM selectors can change. This POC uses semantic/stable-looking attributes where possible (`#prompt-textarea`, `data-message-author-role`, `data-testid`) but must be re-tested against the live site.
-- Completion detection uses the presence of ChatGPT's stop button plus a new assistant turn. Tool-heavy/rich responses may need stronger production logic.
+- Completion detection uses a new-turn baseline plus ChatGPT's stop-button state. Tool-heavy/rich responses may need stronger production logic.
 - Latest-response extraction returns visible text, not a lossless reconstruction of every rich widget/artifact.
 - `set the clipboard` replaces the current clipboard contents. Production code should decide whether/how to preserve and restore it.
-- Title matching allows exact title and the common ` - ChatGPT` / ` | ChatGPT` suffixes only, and fails on duplicates rather than guessing.
+- Crash/restart duplicate-send semantics are intentionally not solved in this feasibility POC; Team C should define message identity/idempotency before production implementation.
+- The Apple Events permission is powerful: a permitted local process can inspect/execute JavaScript in browser pages. Production must restrict itself to `chatgpt.com`, minimize logs, and never expose this as a network service.
 - This branch is evidence scaffolding, not production architecture.
 
 ## Token estimate V0
 
-Do not add a tokenizer dependency for the first slice. Store exact visible character counts and a clearly labeled rough token estimate such as:
+Do not add a tokenizer dependency for the first slice. Store exact visible character counts and a clearly labeled rough token estimate:
 
 `estimated_tokens_v0 = ceil(character_count / 4)`
 
-Record the estimator name/version and `authoritative: false`. This is intentionally approximate and can be replaced later if mixed-language/code accuracy becomes materially useful.
+Record the estimator name/version and `authoritative: false`. This is intentionally approximate. A tokenizer can be added later only if multilingual/code estimation error becomes materially useful.
