@@ -529,7 +529,7 @@ on sendAndWait(theMatch, messageText)
 		set observedUserCount to (my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; return u.toString(); })()")) as integer
 		if observedUserCount > expectedUserCount then error "Manual/concurrent interference detected before submitted turn confirmation; refusing response association"
 		if observedUserCount is expectedUserCount then
-			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; return u.length ? u[u.length-1].innerText.trim() : ''; })()")
+			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const semantic=n=>{ const root=n.querySelector('[data-search-result-target]')||n; const c=root.cloneNode(true); c.querySelectorAll('[data-markdown-copy=\"exclude\"],[data-thread-find-skip=\"true\"],[aria-hidden=\"true\"],[inert]').forEach(x=>x.remove()); return (c.innerText||c.textContent||'').trim(); }; return u.length ? semantic(u[u.length-1]) : ''; })()")
 			if lastUserText is messageText then
 				set userTurnConfirmed to true
 				exit repeat
@@ -540,7 +540,7 @@ on sendAndWait(theMatch, messageText)
 	end repeat
 	if userTurnConfirmed is false then error "Submitted user turn could not be verified; refusing to associate a later response"
 
-	set userSequenceJS to "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; return JSON.stringify(u.map(n => n.innerText.trim())); })()"
+	set userSequenceJS to "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const semantic=n=>{ const root=n.querySelector('[data-search-result-target]')||n; const c=root.cloneNode(true); c.querySelectorAll('[data-markdown-copy=\"exclude\"],[data-thread-find-skip=\"true\"],[aria-hidden=\"true\"],[inert]').forEach(x=>x.remove()); return (c.innerText||c.textContent||'').trim(); }; return JSON.stringify(u.map(semantic)); })()"
 	set ownedUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
 
 	set idleConfirmations to 0
