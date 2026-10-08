@@ -504,9 +504,16 @@ on sendAndWait(theMatch, messageText)
 	set oldDelims to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to "|"
 	set baselineAssistantCount to (text item 2 of preflight) as integer
-	set baselineUserCount to (text item 3 of preflight) as integer
 	set AppleScript's text item delimiters to oldDelims
-	set expectedUserCount to baselineUserCount + 1
+
+	-- Visible ChatGPT user nodes are virtualized: old bubbles may disappear
+	-- after Send, so an absolute DOM count is not a stable sequence identity.
+	-- Snapshot stable per-message IDs instead. Missing IDs fail closed before
+	-- any paste/send action.
+	set baselineUserIDs to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const ids=u.map(n=>n.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')||''); if(ids.some(x=>!x)) return 'MISSING_ID'; return ids.join(','); })()")
+	if baselineUserIDs is "MISSING_ID" then error "Cannot establish stable user-message IDs before send; refusing operation"
+	set lastSemanticUserJS to "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const semantic=n=>{ const root=n.querySelector('[data-search-result-target]')||n; const c=root.cloneNode(true); c.querySelectorAll('[data-markdown-copy=\"exclude\"],[data-thread-find-skip=\"true\"],[aria-hidden=\"true\"],[inert]').forEach(x=>x.remove()); return (c.innerText||c.textContent||'').trim(); }; return u.length ? semantic(u[u.length-1]) : ''; })()"
+	set userOwnershipJS to "(() => { const baseline=new Set('" & baselineUserIDs & "'.split(',').filter(Boolean)); let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const ids=u.map(n=>n.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')||''); if(ids.some(x=>!x)) return 'MISSING_ID'; const fresh=ids.filter(id=>!baseline.has(id)); return fresh.length + '|' + fresh.join(',') + '|' + (ids.length ? ids[ids.length-1] : ''); })()"
 
 	set the clipboard to messageText
 	my pasteVerifiedSelection(expectedTabID, canonicalURL)
@@ -524,24 +531,33 @@ on sendAndWait(theMatch, messageText)
 	if sendState is not "SENT" then error "Message was NOT submitted: " & sendState
 
 	set userTurnConfirmed to false
+	set submittedUserID to ""
 	repeat with attempt from 1 to 10
 		delay 0.5
-		set observedUserCount to (my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=document.querySelectorAll('[data-message-author-role=user]').length; if(!u) u=document.querySelectorAll('[data-user-message-bubble=\"true\"]').length; return u.toString(); })()")) as integer
-		if observedUserCount > expectedUserCount then error "Manual/concurrent interference detected before submitted turn confirmation; refusing response association"
-		if observedUserCount is expectedUserCount then
-			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const semantic=n=>{ const root=n.querySelector('[data-search-result-target]')||n; const c=root.cloneNode(true); c.querySelectorAll('[data-markdown-copy=\"exclude\"],[data-thread-find-skip=\"true\"],[aria-hidden=\"true\"],[inert]').forEach(x=>x.remove()); return (c.innerText||c.textContent||'').trim(); }; return u.length ? semantic(u[u.length-1]) : ''; })()")
+		set ownershipState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userOwnershipJS)
+		if ownershipState is "MISSING_ID" then error "Stable user-message ID disappeared during submitted-turn confirmation; refusing response association"
+
+		set oldDelims to AppleScript's text item delimiters
+		set AppleScript's text item delimiters to "|"
+		set freshUserCount to (text item 1 of ownershipState) as integer
+		set freshUserIDs to text item 2 of ownershipState
+		set lastUserID to text item 3 of ownershipState
+		set AppleScript's text item delimiters to oldDelims
+
+		if freshUserCount > 1 then error "Manual/concurrent interference detected before submitted turn confirmation; multiple new user turns appeared"
+		if freshUserCount is 1 then
+			set submittedUserID to freshUserIDs
+			if lastUserID is not submittedUserID then error "Manual/concurrent interference detected before submitted turn confirmation; submitted turn is not latest"
+			set lastUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, lastSemanticUserJS)
 			if lastUserText is messageText then
 				set userTurnConfirmed to true
 				exit repeat
 			else
-				error "Tracked user sequence changed before submitted turn confirmation; refusing response association"
+				error "Tracked user turn text changed before submitted turn confirmation; refusing response association"
 			end if
 		end if
 	end repeat
 	if userTurnConfirmed is false then error "Submitted user turn could not be verified; refusing to associate a later response"
-
-	set userSequenceJS to "(() => { let u=[...document.querySelectorAll('[data-message-author-role=user]')]; if(!u.length) u=[...document.querySelectorAll('[data-user-message-bubble=\"true\"]')]; const semantic=n=>{ const root=n.querySelector('[data-search-result-target]')||n; const c=root.cloneNode(true); c.querySelectorAll('[data-markdown-copy=\"exclude\"],[data-thread-find-skip=\"true\"],[aria-hidden=\"true\"],[inert]').forEach(x=>x.remove()); return (c.innerText||c.textContent||'').trim(); }; return JSON.stringify(u.map(semantic)); })()"
-	set ownedUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
 
 	set idleConfirmations to 0
 	repeat with attempt from 1 to 180
@@ -556,9 +572,19 @@ on sendAndWait(theMatch, messageText)
 		set isBusy to text item 3 of responseState
 		set AppleScript's text item delimiters to oldDelims
 
-		if responseUserCount is not expectedUserCount then error "Manual/concurrent interference detected: unexpected additional or missing user turn; refusing response association"
-		set currentUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
-		if currentUserSequence is not ownedUserSequence then error "Manual/concurrent interference detected: tracked user sequence changed; refusing response association"
+		set ownershipState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userOwnershipJS)
+		if ownershipState is "MISSING_ID" then error "Manual/concurrent interference detected: stable user-message identity became unavailable"
+		set oldDelims to AppleScript's text item delimiters
+		set AppleScript's text item delimiters to "|"
+		set freshUserCount to (text item 1 of ownershipState) as integer
+		set freshUserIDs to text item 2 of ownershipState
+		set lastUserID to text item 3 of ownershipState
+		set AppleScript's text item delimiters to oldDelims
+		if freshUserCount is not 1 then error "Manual/concurrent interference detected: unexpected number of new user turns; refusing response association"
+		if freshUserIDs is not submittedUserID then error "Manual/concurrent interference detected: unexpected new user-turn identity; refusing response association"
+		if lastUserID is not submittedUserID then error "Manual/concurrent interference detected: submitted user turn is no longer latest"
+		set currentUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, lastSemanticUserJS)
+		if currentUserText is not messageText then error "Manual/concurrent interference detected: submitted user-turn text changed"
 
 		if (responseAssistantCount > baselineAssistantCount) and (isBusy is "0") then
 			set idleConfirmations to idleConfirmations + 1
@@ -568,8 +594,19 @@ on sendAndWait(theMatch, messageText)
 
 		if idleConfirmations is greater than or equal to 2 then
 			-- Final ownership check immediately before response extraction.
-			set finalUserSequence to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userSequenceJS)
-			if finalUserSequence is not ownedUserSequence then error "Manual/concurrent interference detected before response extraction; refusing response association"
+			set finalOwnershipState to my executeVerifiedJavaScript(expectedTabID, canonicalURL, userOwnershipJS)
+			if finalOwnershipState is "MISSING_ID" then error "Manual/concurrent interference detected before response extraction: stable user-message identity unavailable"
+			set oldDelims to AppleScript's text item delimiters
+			set AppleScript's text item delimiters to "|"
+			set finalFreshUserCount to (text item 1 of finalOwnershipState) as integer
+			set finalFreshUserIDs to text item 2 of finalOwnershipState
+			set finalLastUserID to text item 3 of finalOwnershipState
+			set AppleScript's text item delimiters to oldDelims
+			if finalFreshUserCount is not 1 then error "Manual/concurrent interference detected before response extraction: unexpected number of new user turns"
+			if finalFreshUserIDs is not submittedUserID then error "Manual/concurrent interference detected before response extraction: unexpected user-turn identity"
+			if finalLastUserID is not submittedUserID then error "Manual/concurrent interference detected before response extraction: submitted turn is no longer latest"
+			set finalUserText to my executeVerifiedJavaScript(expectedTabID, canonicalURL, lastSemanticUserJS)
+			if finalUserText is not messageText then error "Manual/concurrent interference detected before response extraction: submitted user-turn text changed"
 			return my latestForActiveCanonical(expectedTabID, canonicalURL)
 		end if
 	end repeat
